@@ -2,7 +2,8 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
-  output: "standalone",
+  // NOTE: Do NOT set output:"standalone" on Vercel — Vercel manages its own output format.
+  // Use standalone only for Docker/self-hosted deployments.
   experimental: {
     serverActions: {
       bodySizeLimit: "10mb",
@@ -25,10 +26,9 @@ const nextConfig: NextConfig = {
           },
           {
             key: "Content-Security-Policy",
-            // FIX: Added 'unsafe-eval' for dev mode and allowed the grainy-gradients image domain
-            value: process.env.NODE_ENV === 'development'
-              ? "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://grainy-gradients.vercel.app; connect-src 'self'; frame-ancestors 'none';"
-              : "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://grainy-gradients.vercel.app; connect-src 'self'; frame-ancestors 'none';",
+            value: process.env.NODE_ENV === "development"
+              ? "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://grainy-gradients.vercel.app; connect-src 'self' https:; frame-ancestors 'none';"
+              : "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://grainy-gradients.vercel.app; connect-src 'self' https:; frame-ancestors 'none';",
           },
         ],
       },
