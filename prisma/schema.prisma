@@ -1,0 +1,417 @@
+// ==========================================================
+// LegalSetu — Prisma Schema
+// PostgreSQL + pgvector extension for embedding storage
+// ==========================================================
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"] // <-- ADDED: Fixes the P1012 pgvector error
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [vector]
+}
+
+// ---------------- ENUMS ----------------
+
+enum Role {
+  USER
+  ADMIN
+  RESEARCHER
+}
+
+enum CaseStatus {
+  OPEN
+  IN_PROGRESS
+  ESCALATED
+  RESOLVED
+  CLOSED
+}
+
+enum MessageRole {
+  USER
+  ASSISTANT
+  SYSTEM
+}
+
+enum EvidenceLevel {
+  STRONG
+  MODERATE
+  LIMITED
+  INSUFFICIENT
+}
+
+enum DocumentStatus {
+  UPLOADED
+  VALIDATING
+  EXTRACTING
+  CHUNKING
+  EMBEDDING
+  READY
+  FAILED
+}
+
+enum DocumentType {
+  PDF
+  DOCX
+  TXT
+  IMAGE
+}
+
+enum SourceType {
+  STATUTE
+  JUDGMENT
+  NOTIFICATION
+  GOVERNMENT_CIRCULAR
+  OTHER_VERIFIED
+}
+
+enum VerificationStatus {
+  VERIFIED
+  PENDING_REVIEW
+  UNVERIFIED
+}
+
+enum FIRStatus {
+  DRAFT
+  VALIDATED
+  FINALIZED
+}
+
+enum ReferralReason {
+  LOW_CONFIDENCE
+  HIGH_RISK
+  USER_REQUESTED
+  REQUIRES_REPRESENTATION
+}
+
+enum NotificationType {
+  SYSTEM
+  CASE_UPDATE
+  DOCUMENT_READY
+  FIR_READY
+  SECURITY
+}
+
+// ---------------- CORE AUTH ----------------
+
+model User {
+  id            String    @id @default(uuid())
+  name          String?
+  email         String    @unique
+  emailVerified DateTime?
+  passwordHash  String?
+  image         String?
+  role          Role      @default(USER)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  accounts      Account[]
+  sessions      Session[]
+  cases         Case[]
+  conversations Conversation[]
+  documents     Document[]
+  firDrafts     FIRDraft[]
+  preferences   UserPreference?
+  auditLogs     AuditLog[]
+  feedback      Feedback[]
+  notifications Notification[]
+
+  @@index([email])
+}
+
+model Account {
+  id                String  @id @default(uuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(uuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// ---------------- USER PREFERENCES ----------------
+
+model UserPreference {
+  id                String   @id @default(uuid())
+  userId            String   @unique
+  interfaceLanguage String   @default("en")
+  responseLanguage  String   @default("en")
+  voiceLanguage     String   @default("en")
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ---------------- CASES ----------------
+
+model Case {
+  id           String     @id @default(uuid())
+  userId       String
+  title        String
+  summary      String?    @db.Text
+  status       CaseStatus @default(OPEN)
+  jurisdiction String?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  user          User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversations Conversation[]
+  documents     Document[]
+  firDrafts     FIRDraft[]
+  referrals     LawyerReferral[]
+
+  @@index([userId])
+  @@index([status])
+}
+
+// ---------------- CHAT ----------------
+
+model Conversation {
+  id        String   @id @default(uuid())
+  userId    String
+  caseId    String?
+  title     String   @default("New conversation")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  case     Case?     @relation(fields: [caseId], references: [id], onDelete: SetNull)
+  messages Message[]
+
+  @@index([userId])
+  @@index([caseId])
+}
+
+model Message {
+  id             String         @id @default(uuid())
+  conversationId String
+  role           MessageRole
+  content        String         @db.Text
+  language       String         @default("en")
+  evidenceLevel  EvidenceLevel?
+  createdAt      DateTime       @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  citations    Citation[]
+  feedback     Feedback[]
+
+  @@index([conversationId])
+}
+
+// ---------------- DOCUMENTS (user uploads) ----------------
+
+model Document {
+  id            String         @id @default(uuid())
+  userId        String
+  caseId        String?
+  title         String
+  fileType      DocumentType
+  storageKey    String
+  sizeBytes     Int
+  status        DocumentStatus @default(UPLOADED)
+  extractedText String?        @db.Text
+  summary       String?        @db.Text
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  user   User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  case   Case?           @relation(fields: [caseId], references: [id], onDelete: SetNull)
+  chunks DocumentChunk[]
+
+  @@index([userId])
+  @@index([caseId])
+  @@index([status])
+}
+
+model DocumentChunk {
+  id         String                     @id @default(uuid())
+  documentId String
+  text       String                     @db.Text
+  chunkIndex Int
+  page       Int?
+  embedding  Unsupported("vector(1536)")?
+  createdAt  DateTime                   @default(now())
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([documentId])
+}
+
+// ---------------- LEGAL SOURCES (verified corpus for RAG) ----------------
+
+model LegalSource {
+  id                 String             @id @default(uuid())
+  title              String
+  actName            String?
+  sourceType         SourceType
+  jurisdiction       String
+  language           String             @default("en")
+  officialUrl        String?
+  publicationDate    DateTime?
+  effectiveDate      DateTime?
+  version            String?
+  verificationStatus VerificationStatus @default(PENDING_REVIEW)
+  lastVerifiedAt     DateTime?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  chunks    LegalSourceChunk[]
+  citations Citation[]
+
+  @@index([jurisdiction])
+  @@index([sourceType])
+  @@index([verificationStatus])
+}
+
+model LegalSourceChunk {
+  id        String                     @id @default(uuid())
+  sourceId  String
+  section   String?
+  chapter   String?
+  page      Int?
+  text      String                     @db.Text
+  embedding Unsupported("vector(1536)")?
+  createdAt DateTime                   @default(now())
+
+  source LegalSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+
+  @@index([sourceId])
+}
+
+// ---------------- CITATIONS ----------------
+
+model Citation {
+  id            String   @id @default(uuid())
+  messageId     String
+  legalSourceId String
+  section       String?
+  snippet       String   @db.Text
+  createdAt     DateTime @default(now())
+
+  message     Message     @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  legalSource LegalSource @relation(fields: [legalSourceId], references: [id], onDelete: Cascade)
+
+  @@index([messageId])
+  @@index([legalSourceId])
+}
+
+// ---------------- FIR ASSISTANT ----------------
+
+model FIRDraft {
+  id                String         @id @default(uuid())
+  userId            String
+  caseId            String?
+  status            FIRStatus      @default(DRAFT)
+  incidentType      String?
+  incidentDate      DateTime?
+  location          String?
+  peopleInvolved    String?        @db.Text
+  description       String?        @db.Text
+  evidence          String?        @db.Text
+  witnesses         String?        @db.Text
+  additionalDetails String?        @db.Text
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  user       User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  case       Case?          @relation(fields: [caseId], references: [id], onDelete: SetNull)
+  validation FIRValidation?
+
+  @@index([userId])
+  @@index([caseId])
+}
+
+model FIRValidation {
+  id                String   @id @default(uuid())
+  firDraftId        String   @unique
+  missingFields     String[]
+  inconsistencies   String[]
+  completenessScore Int
+  createdAt         DateTime @default(now())
+
+  firDraft FIRDraft @relation(fields: [firDraftId], references: [id], onDelete: Cascade)
+}
+
+// ---------------- LAWYER / LEGAL AID REFERRAL ----------------
+
+model LawyerReferral {
+  id        String         @id @default(uuid())
+  caseId    String
+  reason    ReferralReason
+  notes     String?        @db.Text
+  createdAt DateTime       @default(now())
+
+  case Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@index([caseId])
+}
+
+// ---------------- AUDIT / FEEDBACK / NOTIFICATIONS ----------------
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  userId    String?
+  action    String
+  metadata  Json?
+  ipAddress String?
+  createdAt DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([action])
+}
+
+model Feedback {
+  id        String   @id @default(uuid())
+  userId    String
+  messageId String?
+  rating    Int
+  comment   String?  @db.Text
+  createdAt DateTime @default(now())
+
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  message Message? @relation(fields: [messageId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+}
+
+model Notification {
+  id        String           @id @default(uuid())
+  userId    String
+  type      NotificationType
+  title     String
+  body      String?
+  read      Boolean          @default(false)
+  createdAt DateTime         @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([read])
+}
