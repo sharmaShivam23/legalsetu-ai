@@ -57,7 +57,7 @@ export class GeminiProvider implements AIProvider {
     }
     this.client = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
     this.chatModel = process.env.GEMINI_CHAT_MODEL ?? "gemini-1.5-flash";
-    this.embeddingModel = process.env.GEMINI_EMBEDDING_MODEL ?? "text-embedding-004";
+    this.embeddingModel = process.env.GEMINI_EMBEDDING_MODEL ?? "gemini-embedding-001";
   }
 
   async complete(options: LLMCompletionOptions): Promise<string> {
@@ -113,7 +113,14 @@ export class GeminiProvider implements AIProvider {
 
   async embed(text: string): Promise<EmbeddingResult> {
     const model = this.client.getGenerativeModel({ model: this.embeddingModel });
-    const result = await model.embedContent(text);
+    // Match the fixed pgvector(1536) column defined in prisma/schema.prisma.
+    // gemini-embedding-001 defaults to 3072 dims, so we must explicitly
+    // truncate the output to 1536 or every insert/query will fail with a
+    // dimension mismatch against the database column.
+    const result = await model.embedContent({
+      content: { role: "user", parts: [{ text }] },
+      outputDimensionality: 1536,
+    } as Parameters<typeof model.embedContent>[0]);
     const embedding = result.embedding.values;
     return { embedding, dimensions: embedding.length };
   }
