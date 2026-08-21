@@ -1,179 +1,184 @@
 "use client";
 
-import { useState } from "react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
-import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { CheckCircle2, AlertTriangle } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { useForm, FormProvider } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { useSession } from "next-auth/react";
 import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { firWizardDataSchema, type FirWizardDataInput } from "@/lib/validation/fir-wizard-schema";
+import { WIZARD_STEP_KEYS, WIZARD_STEP_LABELS } from "@/lib/fir/types";
+import type { FIRWizardData } from "@/lib/fir/types";
+import { computeCompleteness } from "@/lib/fir/completeness";
+import {
+  StepIncidentType,
+  StepDateTime,
+  StepLocation,
+  StepAccused,
+  StepLossHarm,
+  StepNarrative,
+  StepWitnesses,
+  StepReview,
+} from "./wizard-steps";
+import { FirDraftPreview } from "./fir-draft-preview";
 
-const STEPS = [
-  { key: "incidentType", label: "Incident type", placeholder: "e.g. Theft, Land dispute, Fraud" },
-  { key: "incidentDate", label: "Date/time of incident", type: "datetime-local" },
-  { key: "location", label: "Location", placeholder: "Where did this happen?" },
-  { key: "peopleInvolved", label: "People involved", placeholder: "Names, relationships if known" },
-  { key: "description", label: "What happened?", textarea: true },
-  { key: "evidence", label: "Evidence you have", textarea: true },
-  { key: "witnesses", label: "Witnesses", placeholder: "Names/contact if available" },
-  { key: "additionalDetails", label: "Additional details", textarea: true },
-] as const;
+const STEP_COMPONENTS = [
+  StepIncidentType,
+  StepDateTime,
+  StepLocation,
+  StepAccused,
+  StepLossHarm,
+  StepNarrative,
+  StepWitnesses,
+  StepReview,
+];
 
-type FormState = Record<string, string>;
+interface FIRWizardProps {
+  caseId?: string;
+}
 
-export function FIRWizard() {
-  const [step, setStep] = useState(0);
-  const [form, setForm] = useState<FormState>({});
+export function FIRWizard({ caseId }: FIRWizardProps) {
+  const { data: session } = useSession();
+  const [stepIndex, setStepIndex] = useState(0);
   const [draftId, setDraftId] = useState<string | null>(null);
-  const [validation, setValidation] = useState<any>(null);
+  const [saving, setSaving] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [finalized, setFinalized] = useState(false);
+  const creatingRef = useRef(false);
 
-  const current = STEPS[step];
-  const isLast = step === STEPS.length - 1;
+  const methods = useForm<FirWizardDataInput>({
+    resolver: zodResolver(firWizardDataSchema.partial()),
+    defaultValues: {},
+    mode: "onBlur",
+  });
 
-  function updateField(value: string) {
-    setForm((f) => ({ ...f, [current.key]: value }));
-  }
+  const { watch, handleSubmit, getValues } = methods;
+  const formData = watch();
 
-  async function handleGenerate() {
-    setSubmitting(true);
+  // Create the draft record on first mount so progress can be autosaved.
+  useEffect(() => {
+    if (draftId || creatingRef.current) return;
+    creatingRef.current = true;
+    (async () => {
+      try {
+        const res = await fetch("/api/fir", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ caseId, formData: {} }),
+        });
+        const json = await res.json();
+        if (json.success) setDraftId(json.data.draft.id);
+      } catch {
+        // Non-fatal — user can still fill the form; save happens on submit.
+      }
+    })();
+  }, [draftId, caseId]);
+
+  async function persistProgress(values: FirWizardDataInput) {
+    if (!draftId) return;
+    setSaving(true);
     try {
-      const payload = { ...form };
-      if (payload.incidentDate) {
-        payload.incidentDate = new Date(payload.incidentDate).toISOString();
-      }
-      const res = await fetch("/api/fir", {
-        method: "POST",
+      await fetch(`/api/fir/${draftId}`, {
+        method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ formData: values }),
       });
-      const data = await res.json();
-      if (!data.success) {
-        toast.error(data.error?.message ?? "Could not generate draft.");
-        return;
-      }
-      setDraftId(data.data.draft.id);
-
-      const validateRes = await fetch("/api/fir/validate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ firDraftId: data.data.draft.id }),
-      });
-      const validateData = await validateRes.json();
-      if (validateData.success) setValidation(validateData.data.validation);
+    } catch {
+      // Autosave failures are silent — data still lives in form state.
     } finally {
-      setSubmitting(false);
+      setSaving(false);
     }
   }
 
-  if (draftId && validation) {
+  async function goNext() {
+    await persistProgress(getValues());
+    setStepIndex((s) => Math.min(STEP_COMPONENTS.length - 1, s + 1));
+  }
+
+  function goBack() {
+    setStepIndex((s) => Math.max(0, s - 1));
+  }
+
+  const onSubmit = handleSubmit(async (values) => {
+    setSubmitting(true);
+    try {
+      await persistProgress(values);
+      if (draftId) {
+        const res = await fetch("/api/fir/validate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ firDraftId: draftId }),
+        });
+        const json = await res.json();
+        if (!json.success) {
+          toast.error(json.error?.message ?? "Could not validate draft.");
+        }
+      }
+      setFinalized(true);
+    } finally {
+      setSubmitting(false);
+    }
+  });
+
+  if (finalized) {
+    const completeness = computeCompleteness(formData as FIRWizardData);
     return (
-      <Card>
-        <CardContent className="space-y-4 p-6">
-          <Badge variant="warning">Draft / Assistance Document</Badge>
-          <h2 className="text-lg font-semibold text-navy-900">FIR Draft Summary</h2>
-          <div className="rounded-xl bg-slate-50 p-4 text-sm">
-            <p><strong>Completeness:</strong> {validation.completenessScore}%</p>
-          </div>
-
-          {validation.missingFields.length > 0 && (
-            <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-              <div>
-                <p className="font-medium">Missing information:</p>
-                <ul className="mt-1 list-disc pl-4">
-                  {validation.missingFields.map((f: string) => (
-                    <li key={f}>{f}</li>
-                  ))}
-                </ul>
-              </div>
-            </div>
-          )}
-
-          {validation.missingFields.length === 0 && (
-            <div className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
-              <CheckCircle2 className="h-4 w-4" />
-              All required fields are complete.
-            </div>
-          )}
-
-          <div className="rounded-xl border border-slate-200 p-4 text-sm text-slate-600">
-            <p className="mb-2 font-medium text-navy-900">Draft contents</p>
-            {Object.entries(form).map(([k, v]) =>
-              v ? (
-                <p key={k} className="mb-1">
-                  <span className="font-medium capitalize">{k}: </span>
-                  {v}
-                </p>
-              ) : null
-            )}
-          </div>
-
-          <p className="text-xs text-slate-400">
-            This is a draft assistance document, not an officially filed FIR.
-            Please review it with the appropriate police station or legal aid
-            service before submission.
-          </p>
-        </CardContent>
-      </Card>
+      <FirDraftPreview
+        data={formData as FIRWizardData}
+        completeness={completeness}
+        applicantName={session?.user?.name ?? undefined}
+      />
     );
   }
 
+  const StepComponent = STEP_COMPONENTS[stepIndex];
+  const isLast = stepIndex === STEP_COMPONENTS.length - 1;
+  const liveCompleteness = computeCompleteness(formData as FIRWizardData);
+
   return (
-    <Card>
-      <CardContent className="space-y-5 p-6">
-        <div className="flex items-center justify-between">
-          <span className="text-xs font-medium text-slate-400">
-            Step {step + 1} of {STEPS.length}
-          </span>
-          <div className="h-1.5 w-32 overflow-hidden rounded-full bg-slate-100">
-            <div
-              className="h-full bg-brand-500 transition-all"
-              style={{ width: `${((step + 1) / STEPS.length) * 100}%` }}
-            />
+    <FormProvider {...methods}>
+      <Card>
+        <CardContent className="space-y-5 p-6">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium text-slate-400">
+              Step {stepIndex + 1} of {STEP_COMPONENTS.length} — {WIZARD_STEP_LABELS[WIZARD_STEP_KEYS[stepIndex]]}
+            </span>
+            <div className="flex items-center gap-2">
+              {saving && <span className="text-xs text-slate-400">Saving…</span>}
+              <div className="h-1.5 w-32 overflow-hidden rounded-full bg-slate-100">
+                <div
+                  className="h-full bg-brand-500 transition-all"
+                  style={{ width: `${((stepIndex + 1) / STEP_COMPONENTS.length) * 100}%` }}
+                />
+              </div>
+            </div>
           </div>
-        </div>
 
-        <div>
-          <label className="mb-2 block text-sm font-medium text-navy-900">
-            {current.label}
-          </label>
-          {"textarea" in current && current.textarea ? (
-            <Textarea
-              value={form[current.key] ?? ""}
-              onChange={(e) => updateField(e.target.value)}
-              rows={4}
-            />
-          ) : (
-            <Input
-              type={"type" in current ? current.type : "text"}
-              placeholder={"placeholder" in current ? current.placeholder : ""}
-              value={form[current.key] ?? ""}
-              onChange={(e) => updateField(e.target.value)}
-            />
-          )}
-        </div>
+          <StepComponent />
 
-        <div className="flex justify-between">
-          <Button
-            variant="outline"
-            onClick={() => setStep((s) => Math.max(0, s - 1))}
-            disabled={step === 0}
-          >
-            Back
-          </Button>
-          {isLast ? (
-            <Button variant="brand" onClick={handleGenerate} disabled={submitting}>
-              {submitting ? "Generating..." : "Generate FIR Draft"}
+          <div className="flex items-center justify-between border-t border-slate-100 pt-4">
+            <span className="text-xs text-slate-400">
+              Completeness so far: <strong className="text-slate-600">{liveCompleteness.score}%</strong>
+            </span>
+          </div>
+
+          <div className="flex justify-between">
+            <Button variant="outline" onClick={goBack} disabled={stepIndex === 0}>
+              Back
             </Button>
-          ) : (
-            <Button variant="brand" onClick={() => setStep((s) => s + 1)}>
-              Next
-            </Button>
-          )}
-        </div>
-      </CardContent>
-    </Card>
+            {isLast ? (
+              <Button variant="brand" onClick={onSubmit} disabled={submitting}>
+                {submitting ? "Generating..." : "Generate FIR Draft"}
+              </Button>
+            ) : (
+              <Button variant="brand" onClick={goNext}>
+                Next
+              </Button>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+    </FormProvider>
   );
 }

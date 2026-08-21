@@ -23,6 +23,7 @@
   },
   "dependencies": {
     "@google/generative-ai": "0.21.0",
+    "@hookform/resolvers": "^5.9.1",
     "@prisma/client": "5.22.0",
     "@supabase/server": "^1.4.1",
     "autoprefixer": "10.4.20",
@@ -31,6 +32,7 @@
     "clsx": "2.1.1",
     "date-fns": "4.1.0",
     "ioredis": "5.4.1",
+    "jspdf": "^4.2.1",
     "lucide-react": "0.469.0",
     "mammoth": "1.8.0",
     "nanoid": "5.0.9",
@@ -42,6 +44,7 @@
     "prisma": "5.22.0",
     "react": "19.0.0",
     "react-dom": "19.0.0",
+    "react-hook-form": "^7.85.0",
     "react-markdown": "9.0.1",
     "remark-gfm": "4.0.0",
     "sonner": "1.7.1",

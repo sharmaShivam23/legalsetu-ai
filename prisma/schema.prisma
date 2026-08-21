@@ -5,7 +5,7 @@
 
 generator client {
   provider        = "prisma-client-js"
-  previewFeatures = ["postgresqlExtensions"] // <-- ADDED: Fixes the P1012 pgvector error
+  previewFeatures = ["postgresqlExtensions"]
 }
 
 datasource db {
@@ -249,13 +249,13 @@ model Document {
 }
 
 model DocumentChunk {
-  id         String                     @id @default(uuid())
+  id         String                       @id @default(uuid())
   documentId String
-  text       String                     @db.Text
+  text       String                       @db.Text
   chunkIndex Int
   page       Int?
   embedding  Unsupported("vector(1536)")?
-  createdAt  DateTime                   @default(now())
+  createdAt  DateTime                     @default(now())
 
   document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
 
@@ -289,14 +289,14 @@ model LegalSource {
 }
 
 model LegalSourceChunk {
-  id        String                     @id @default(uuid())
+  id        String                       @id @default(uuid())
   sourceId  String
   section   String?
   chapter   String?
   page      Int?
-  text      String                     @db.Text
+  text      String                       @db.Text
   embedding Unsupported("vector(1536)")?
-  createdAt DateTime                   @default(now())
+  createdAt DateTime                     @default(now())
 
   source LegalSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
 
@@ -335,6 +335,7 @@ model FIRDraft {
   evidence          String?        @db.Text
   witnesses         String?        @db.Text
   additionalDetails String?        @db.Text
+  formData          Json?
   createdAt         DateTime       @default(now())
   updatedAt         DateTime       @updatedAt
 
