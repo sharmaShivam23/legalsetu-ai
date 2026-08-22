@@ -21,6 +21,9 @@
     "rag:ingest": "tsx scripts/ingest-documents.ts",
     "rag:embed": "tsx scripts/generate-embeddings.ts"
   },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
+  },
   "dependencies": {
     "@google/generative-ai": "0.21.0",
     "@prisma/client": "5.22.0",

@@ -23,10 +23,26 @@ interface DocumentRecord {
   id: string;
   fileName: string;
   fileSizeKb: number;
-  category: DocCategory;
+  category: string; // widened — server value isn't guaranteed to already match DocCategory
   ocrText: string;
   ocrConfidenceNote: string;
   analysis: AnalysisResult | null;
+}
+
+// Handles the value coming back as either the hyphenated UI form
+// ("legal-notice") or the raw Prisma enum ("LEGAL_NOTICE") — whichever
+// the API actually sends, this always resolves to a valid DOC_CATEGORIES
+// entry so the page can never crash on category.icon/.label again.
+function normalizeCategory(raw: string | null | undefined): DocCategory {
+  const FALLBACK: DocCategory = "legal-notice";
+  if (!raw) return FALLBACK;
+
+  if (raw in DOC_CATEGORIES) return raw as DocCategory;
+
+  const hyphenated = raw.toLowerCase().replace(/_/g, "-");
+  if (hyphenated in DOC_CATEGORIES) return hyphenated as DocCategory;
+
+  return FALLBACK;
 }
 
 export default function DocumentDetailPage() {
@@ -76,7 +92,8 @@ export default function DocumentDetailPage() {
     );
   }
 
-  const category = DOC_CATEGORIES[doc.category];
+  const categoryKey = normalizeCategory(doc.category);
+  const category = DOC_CATEGORIES[categoryKey];
 
   return (
     <div className="min-h-screen bg-white">
