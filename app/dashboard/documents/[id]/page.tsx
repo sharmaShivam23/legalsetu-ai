@@ -23,7 +23,7 @@ interface DocumentRecord {
   id: string;
   fileName: string;
   fileSizeKb: number;
-  category: string; // widened — server value isn't guaranteed to already match DocCategory
+  category: string; // widened — raw server value isn't guaranteed to already match DocCategory
   ocrText: string;
   ocrConfidenceNote: string;
   analysis: AnalysisResult | null;
@@ -58,14 +58,22 @@ export default function DocumentDetailPage() {
       try {
         const res = await fetch(`/api/documents/${id}`);
         if (!res.ok) throw new Error("Couldn't load this document.");
-        const data = await res.json();
-        setDoc(data);
+
+        // apiSuccess() wraps every response as { success: true, data: {...} } —
+        // the real document payload is under `.data`, not top-level.
+        const json = await res.json();
+        const docData: DocumentRecord | undefined = json?.data;
+        if (!docData) throw new Error("Couldn't load this document.");
+        setDoc(docData);
 
         // Trigger analysis if it hasn't run yet.
-        if (!data.analysis) {
+        if (!docData.analysis) {
           const analyzeRes = await fetch(`/api/documents/${id}/analyze`, { method: "POST" });
-          const analyzeData = await analyzeRes.json();
-          setDoc((prev) => (prev ? { ...prev, analysis: analyzeData.result } : prev));
+          const analyzeJson = await analyzeRes.json();
+          const result: AnalysisResult | undefined = analyzeJson?.data?.result;
+          if (result) {
+            setDoc((prev) => (prev ? { ...prev, analysis: result } : prev));
+          }
         }
       } catch (err) {
         setErrorMsg(err instanceof Error ? err.message : "Something went wrong.");

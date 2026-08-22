@@ -71,7 +71,7 @@ ${ocrText.slice(0, 12000)}
 --- END EXTRACTED TEXT ---`;
 }
 
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await auth();
   if (!session?.user?.id) {
     return apiError("unauthorized", "You must be signed in.", 401);
@@ -82,8 +82,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     return apiError("rate_limited", "Too many analysis requests. Please try again later.", 429);
   }
 
+  const { id } = await params;
+
   const doc = await prisma.legalDocument.findFirst({
-    where: { id: params.id, userId: session.user.id },
+    where: { id, userId: session.user.id },
   });
   if (!doc) {
     return apiError("not_found", "Document not found.", 404);

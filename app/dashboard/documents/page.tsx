@@ -85,7 +85,12 @@ export default function DocumentOcrPage() {
       });
 
       if (!uploadRes.ok) throw new Error("Could not save the document. Please try again.");
-      const { id } = await uploadRes.json();
+
+      // apiSuccess() wraps every response as { success: true, data: {...} } —
+      // the real payload is under `.data`, not top-level.
+      const uploadJson = await uploadRes.json();
+      const id = uploadJson?.data?.id;
+      if (!id) throw new Error("Upload succeeded but no document id was returned.");
 
       router.push(`/dashboard/documents/${id}`);
     } catch (err) {

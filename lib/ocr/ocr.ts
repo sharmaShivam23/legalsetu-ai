@@ -87,8 +87,12 @@ function loadTesseract(): Promise<any> {
       script.src = "https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js";
       script.async = true;
       script.onload = () => resolve(window.Tesseract);
-      script.onerror = () =>
+      script.onerror = () => {
+        // Reset so a later retry (e.g. after the network recovers) doesn't
+        // stay stuck on this same rejected promise forever.
+        tesseractLoadPromise = null;
         reject(new Error("Couldn't load the OCR engine. Check your internet connection and try again."));
+      };
       document.head.appendChild(script);
     });
   }
@@ -96,6 +100,16 @@ function loadTesseract(): Promise<any> {
 }
 
 // ─── PDF loader (CDN, singleton) ───────────────────────────────────────────
+//
+// NOTE: cdnjs.cloudflare.com stopped hosting pdf.js's classic UMD build
+// (pdf.min.js) as of pdf.js v5+ — it now only ships ES module (.mjs)
+// builds there. jsdelivr still serves the legacy UMD build via the
+// pdfjs-dist npm package's /legacy/build/ path, which is what we use here.
+// This also means pdf.js now shares the same CDN (jsdelivr) as Tesseract,
+// so no extra CSP domain is needed beyond what's already allowed.
+
+const PDFJS_VERSION = "4.0.379";
+const PDFJS_BASE = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_VERSION}/legacy/build`;
 
 let pdfjsLoadPromise: Promise<any> | null = null;
 
@@ -106,15 +120,19 @@ function loadPdfJs(): Promise<any> {
   if (!pdfjsLoadPromise) {
     pdfjsLoadPromise = new Promise((resolve, reject) => {
       const script = document.createElement("script");
-      script.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.min.js";
+      script.src = `${PDFJS_BASE}/pdf.min.js`;
       script.async = true;
       script.onload = () => {
         const lib = (window as any).pdfjsLib;
-        lib.GlobalWorkerOptions.workerSrc =
-          "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.worker.min.js";
+        lib.GlobalWorkerOptions.workerSrc = `${PDFJS_BASE}/pdf.worker.min.js`;
         resolve(lib);
       };
-      script.onerror = () => reject(new Error("Couldn't load the PDF engine. Check your connection and try again."));
+      script.onerror = () => {
+        // Reset so a later retry (e.g. after the network recovers) doesn't
+        // stay stuck on this same rejected promise forever.
+        pdfjsLoadPromise = null;
+        reject(new Error("Couldn't load the PDF engine. Check your connection and try again."));
+      };
       document.head.appendChild(script);
     });
   }

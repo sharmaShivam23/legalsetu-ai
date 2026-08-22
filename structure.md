@@ -12,8 +12,10 @@
 ./app/api/cases/[id]/route.ts
 ./app/api/chat/route.ts
 ./app/api/chat/stream/route.ts
+./app/api/documents/ocr-fallback/route.ts
 ./app/api/documents/route.ts
 ./app/api/documents/[id]/analyze/route.ts
+./app/api/documents/[id]/route.ts
 ./app/api/fir/route.ts
 ./app/api/fir/validate/route.ts
 ./app/api/health/route.ts
@@ -87,7 +89,6 @@
 ./lib/utils/cn.ts
 ./lib/validation/schemas.ts
 ./lib/voice/stt.ts
-./middleware.ts
 ./next-env.d.ts
 ./next.config.ts
 ./package-lock.json
@@ -95,9 +96,11 @@
 ./playwright.config.ts
 ./postcss.config.js
 ./prisma/migrations/20260820051345_init/migration.sql
+./prisma/migrations/20260822133157_add_legal_document/migration.sql
 ./prisma/migrations/migration_lock.toml
 ./prisma/schema.prisma
 ./prisma/seed.ts
+./proxy.ts
 ./README.md
 ./scripts/generate-embeddings.ts
 ./scripts/ingest-documents.ts
