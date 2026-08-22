@@ -1,4 +1,4 @@
-// lib/ocr/legal-ocr.ts
+// lib/ocr/ocr.ts
 //
 // LegalSetu — Legal Document OCR (Hybrid: Tesseract-first, Gemini-fallback)
 // ──────────────────────────────────────────────────────────────────────────
@@ -6,7 +6,7 @@
 //   - Tesseract.js does the real work first (fast, free, on-device, handles
 //     standard printed EN/HI text well without any API call).
 //   - Gemini is ONLY invoked as a fallback, and ONLY server-side (via
-//     /api/legal-analysis/ocr-fallback) — never from the browser directly,
+//     /api/documents/ocr-fallback) — never from the browser directly,
 //     so the API key never ships to the client.
 //   - The fallback call is wrapped in a hard timeout + single attempt.
 //     If Gemini is slow, down, or errors, we fall back to whatever
@@ -101,12 +101,16 @@ function loadTesseract(): Promise<any> {
 
 // ─── PDF loader (CDN, singleton) ───────────────────────────────────────────
 //
-// NOTE: cdnjs.cloudflare.com stopped hosting pdf.js's classic UMD build
-// (pdf.min.js) as of pdf.js v5+ — it now only ships ES module (.mjs)
-// builds there. jsdelivr still serves the legacy UMD build via the
-// pdfjs-dist npm package's /legacy/build/ path, which is what we use here.
-// This also means pdf.js now shares the same CDN (jsdelivr) as Tesseract,
-// so no extra CSP domain is needed beyond what's already allowed.
+// NOTE: as of pdfjs-dist@4.x, even the /legacy/build/ path no longer ships
+// a classic UMD script (pdf.min.js) on jsdelivr — only ES module builds
+// (pdf.min.mjs). Loading it via a plain <script src="..."> tag 404s, which
+// is why "Couldn't load the PDF engine" was showing up. We load it as a
+// real ES module instead, via a <script type="module"> that dynamically
+// imports the .mjs build and stashes it on window for the singleton cache
+// below (dynamic `import()` of a remote CDN URL also works directly in
+// modern browsers, but this keeps the same window.pdfjsLib caching shape
+// as the rest of this file, and avoids bundler issues with a literal
+// cross-origin specifier in `import()`).
 
 const PDFJS_VERSION = "4.0.379";
 const PDFJS_BASE = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_VERSION}/legacy/build`;
@@ -120,17 +124,26 @@ function loadPdfJs(): Promise<any> {
   if (!pdfjsLoadPromise) {
     pdfjsLoadPromise = new Promise((resolve, reject) => {
       const script = document.createElement("script");
-      script.src = `${PDFJS_BASE}/pdf.min.js`;
-      script.async = true;
-      script.onload = () => {
+      script.type = "module";
+      // Import the ES module build, expose it on window, then dispatch a
+      // custom event so this promise can resolve once it's actually ready.
+      script.textContent = `
+        import * as pdfjsLib from "${PDFJS_BASE}/pdf.min.mjs";
+        window.pdfjsLib = pdfjsLib;
+        window.dispatchEvent(new Event("pdfjs-ready"));
+      `;
+      const onReady = () => {
+        window.removeEventListener("pdfjs-ready", onReady);
         const lib = (window as any).pdfjsLib;
-        lib.GlobalWorkerOptions.workerSrc = `${PDFJS_BASE}/pdf.worker.min.js`;
+        lib.GlobalWorkerOptions.workerSrc = `${PDFJS_BASE}/pdf.worker.min.mjs`;
         resolve(lib);
       };
+      window.addEventListener("pdfjs-ready", onReady);
       script.onerror = () => {
         // Reset so a later retry (e.g. after the network recovers) doesn't
         // stay stuck on this same rejected promise forever.
         pdfjsLoadPromise = null;
+        window.removeEventListener("pdfjs-ready", onReady);
         reject(new Error("Couldn't load the PDF engine. Check your connection and try again."));
       };
       document.head.appendChild(script);
@@ -234,7 +247,7 @@ async function tryGeminiFallback(
     const formData = new FormData();
     formData.append("image", imageBlob, "page.png");
 
-    const res = await fetch("/api/legal-analysis/ocr-fallback", {
+    const res = await fetch("/api/documents/ocr-fallback", {
       method: "POST",
       body: formData,
       signal: controller.signal,
