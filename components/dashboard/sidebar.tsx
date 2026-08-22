@@ -25,7 +25,7 @@ import { SUPPORTED_LANGUAGES } from "@/lib/translation/languages";
 const NAV_ITEMS = [
   { href: "/dashboard/chat", label: "Ask LegalSetu", icon: MessagesSquare },
   { href: "/dashboard/cases", label: "My Cases", icon: Folder },
-  { href: "/dashboard/documents", label: "Documents", icon: FileText },
+  { href: "/dashboard/documents", label: "Documents OCR", icon: FileText },
   { href: "/dashboard/fir", label: "FIR Assistant", icon: FileSignature },
   { href: "/dashboard/sources", label: "Saved Sources", icon: BookMarked },
   { href: "/dashboard/lawyer", label: "Lawyer / Legal Aid", icon: Users },
