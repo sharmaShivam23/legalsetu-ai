@@ -22,7 +22,7 @@ export default function SplashScreen() {
   return (
     <>
       <style dangerouslySetInnerHTML={{ __html: `
-        /* 1. CSS Fade-Out Guarantee (Impossible to freeze) */
+        /* 1. CSS Fade-Out Guarantee */
         .splash-wrapper {
           animation: fadeOutSplash 4s ease-in-out forwards;
         }
@@ -50,16 +50,16 @@ export default function SplashScreen() {
         .splash-progress { animation: progress-fill 3.3s cubic-bezier(0.76, 0, 0.24, 1) forwards; }
       `}} />
 
-      <div className="splash-wrapper fixed inset-0 z-[100000] flex flex-col items-center justify-center bg-[#0B1120]">
+      <div className="splash-wrapper fixed inset-0 z-[100000] flex flex-col items-center justify-center bg-slate-50">
         
-        {/* Subtle Grid Background */}
-        <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.02)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.02)_1px,transparent_1px)] bg-[size:40px_40px] [mask-image:radial-gradient(ellipse_60%_50%_at_50%_50%,#000_70%,transparent_100%)]"></div>
+        {/* Subtle Grid Background for Light Mode */}
+        <div className="absolute inset-0 bg-[linear-gradient(rgba(15,23,42,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(15,23,42,0.03)_1px,transparent_1px)] bg-[size:40px_40px] [mask-image:radial-gradient(ellipse_60%_50%_at_50%_50%,#000_70%,transparent_100%)]"></div>
         
-        {/* Glowing Orb */}
-        <div className="absolute top-1/2 left-1/2 h-64 w-64 -translate-x-1/2 -translate-y-1/2 rounded-full bg-blue-500/20 blur-[80px]"></div>
+        {/* Soft Glowing Light Blue Orb */}
+        <div className="absolute top-1/2 left-1/2 h-64 w-64 -translate-x-1/2 -translate-y-1/2 rounded-full bg-blue-400/20 blur-[90px]"></div>
 
         <div className="splash-scene z-10 flex flex-col items-center">
-          {/* The 3D Extruded Logo */}
+          {/* 3D Extruded Logo configured for Light Mode */}
           <div className="splash-object mb-12 h-24 w-24">
             {[...Array(8)].map((_, i) => (
               <div
@@ -68,11 +68,11 @@ export default function SplashScreen() {
                 style={{
                   transform: `translateZ(${i * -4}px)`,
                   opacity: 1 - i * 0.1,
-                  filter: i === 0 ? "drop-shadow(0 0 20px rgba(59,130,246,0.6))" : "none",
+                  filter: i === 0 ? "drop-shadow(0 10px 15px rgba(37,99,235,0.25))" : "none",
                 }}
               >
                 <Scale 
-                  className={`h-24 w-24 ${i === 0 ? "text-white" : "text-blue-500"}`} 
+                  className={`h-24 w-24 ${i === 0 ? "text-blue-600" : "text-blue-300"}`} 
                   strokeWidth={1.5}
                 />
               </div>
@@ -81,17 +81,17 @@ export default function SplashScreen() {
 
           {/* Typography */}
           <div className="mt-8 flex flex-col items-center">
-            <h1 className="font-serif text-4xl font-bold tracking-widest text-white drop-shadow-lg">
+            <h1 className="font-serif text-4xl font-bold tracking-widest text-slate-900 drop-shadow-sm">
               LEGALSETU
             </h1>
-            <p className="mt-3 text-xs font-medium uppercase tracking-[0.3em] text-slate-500">
+            <p className="mt-3 text-xs font-semibold uppercase tracking-[0.3em] text-slate-500">
               Initializing AI Engine
             </p>
           </div>
 
           {/* Loading Bar */}
-          <div className="mt-10 h-1 w-48 overflow-hidden rounded-full bg-slate-800 relative">
-            <div className="splash-progress absolute left-0 top-0 h-full bg-blue-500 shadow-[0_0_10px_rgba(59,130,246,0.8)]"></div>
+          <div className="mt-10 h-1.5 w-48 overflow-hidden rounded-full bg-slate-200 relative shadow-inner">
+            <div className="splash-progress absolute left-0 top-0 h-full bg-blue-600 shadow-[0_0_8px_rgba(37,99,235,0.5)]"></div>
           </div>
         </div>
       </div>

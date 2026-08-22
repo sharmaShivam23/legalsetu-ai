@@ -24,41 +24,46 @@ export default function SourcesPage() {
   }, []);
 
   return (
-    <div className="mx-auto max-w-3xl px-6 py-12">
-      <h1 className="text-2xl font-semibold text-navy-900">Saved Sources</h1>
-      <p className="mt-1 text-sm text-slate-500">
+    <div className="mx-auto max-w-3xl px-6 py-12 text-textPrimary">
+      <h1 className="text-2xl font-semibold text-textPrimary">Saved Sources</h1>
+      <p className="mt-1 text-sm text-textSecondary">
         Verified legal sources available for grounded answers.
       </p>
 
       <div className="mt-8 space-y-3">
-        {sources === null && <p className="text-sm text-slate-400">Loading sources...</p>}
+        {sources === null && <p className="text-sm text-textSecondary">Loading sources...</p>}
 
         {sources !== null && sources.length === 0 && (
-          <Card>
+          <Card className="bg-card border-borderCustom shadow-sm">
             <CardContent className="flex flex-col items-center gap-2 py-12 text-center">
-              <BookMarked className="h-8 w-8 text-slate-300" />
-              <p className="text-sm text-slate-500">No verified sources ingested yet.</p>
-              <p className="text-xs text-slate-400">
-                Run <code>npm run rag:ingest</code> to add sample legal sources, or add real ones via the admin panel.
+              <BookMarked className="h-8 w-8 text-textSecondary opacity-40" />
+              <p className="text-sm font-medium text-textPrimary">No verified sources ingested yet.</p>
+              <p className="text-xs text-textSecondary max-w-md">
+                Run <code className="rounded bg-canvas px-1 py-0.5 text-textPrimary">npm run rag:ingest</code> to add sample legal sources, or add real ones via the admin panel.
               </p>
             </CardContent>
           </Card>
         )}
 
         {sources?.map((s) => (
-          <Card key={s.id}>
+          <Card key={s.id} className="bg-card border-borderCustom shadow-sm hover:border-brandBlue/40 transition-colors">
             <CardContent className="flex items-center justify-between p-4">
               <div>
-                <p className="text-sm font-medium text-navy-900">{s.actName ?? s.title}</p>
-                <p className="text-xs text-slate-400">{s.jurisdiction}</p>
+                <p className="text-sm font-medium text-textPrimary">{s.actName ?? s.title}</p>
+                <p className="text-xs text-textSecondary">{s.jurisdiction}</p>
               </div>
               <div className="flex items-center gap-2">
-                <Badge variant={s.verificationStatus === "VERIFIED" ? "success" : "warning"}>
+                <Badge className="border border-borderCustom bg-canvas text-textPrimary shadow-none">
                   {s.verificationStatus}
                 </Badge>
                 {s.officialUrl && (
-                  <a href={s.officialUrl} target="_blank" rel="noopener noreferrer">
-                    <ExternalLink className="h-4 w-4 text-slate-400" />
+                  <a
+                    href={s.officialUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="p-1 text-textSecondary hover:text-textPrimary transition-colors"
+                  >
+                    <ExternalLink className="h-4 w-4" />
                   </a>
                 )}
               </div>

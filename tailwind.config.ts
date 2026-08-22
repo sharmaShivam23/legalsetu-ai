@@ -1,6 +1,7 @@
 import type { Config } from "tailwindcss";
 
 const config: Config = {
+  darkMode: "class",
   content: [
     "./app/**/*.{ts,tsx}",
     "./components/**/*.{ts,tsx}",
@@ -9,6 +10,16 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
+        /* Theme-aware CSS Variable Color Tokens */
+        canvas: "rgb(var(--bg-main) / <alpha-value>)",
+        card: "rgb(var(--bg-card) / <alpha-value>)",
+        sidebar: "rgb(var(--bg-sidebar) / <alpha-value>)",
+        borderCustom: "rgb(var(--border-color) / <alpha-value>)",
+        textPrimary: "rgb(var(--text-primary) / <alpha-value>)",
+        textSecondary: "rgb(var(--text-secondary) / <alpha-value>)",
+        brandBlue: "rgb(var(--accent-blue) / <alpha-value>)",
+
+        /* Existing Legacy Palette (Maintained for Backwards Compatibility) */
         navy: {
           950: "#0a0f1f",
           900: "#0f172a",

@@ -2,18 +2,45 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  --font-inter: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI",
-    system-ui, sans-serif;
+@layer base {
+  :root {
+    --font-inter: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI",
+      system-ui, sans-serif;
+
+    /* Visily Light Theme */
+    --bg-main: 248 250 252;        /* #F8FAFC - Soft gray canvas */
+    --bg-card: 255 255 255;        /* #FFFFFF - Pure white card surface */
+    --bg-sidebar: 255 255 255;     /* #FFFFFF - Crisp white sidebar */
+    --border-color: 226 232 240;   /* #E2E8F0 - Subtle slate border */
+    --text-primary: 15 23 42;      /* #0F172A - Deep charcoal text */
+    --text-secondary: 100 116 139; /* #64748B - Medium slate text */
+    --accent-blue: 37 99 235;      /* #2563EB - Royal blue accent */
+  }
+
+  .dark {
+    /* Your Existing Dark Theme */
+    --bg-main: 9 13 22;            /* #090D16 - Deep slate canvas */
+    --bg-card: 19 27 46;           /* #131B2E - Dark card surface */
+    --bg-sidebar: 15 23 42;        /* #0F172A - Dark sidebar */
+    --border-color: 30 41 59;      /* #1E293B - Dark border */
+    --text-primary: 248 250 252;   /* #F8FAFC - Off-white text */
+    --text-secondary: 148 163 184;/* #94A3B8 - Muted text */
+    --accent-blue: 59 130 246;     /* #3B82F6 - Bright blue accent */
+  }
 }
 
 body {
-  @apply bg-white text-navy-900 antialiased;
+  background-color: rgb(var(--bg-main));
+  color: rgb(var(--text-primary));
+  font-family: var(--font-inter);
+  @apply antialiased transition-colors duration-200;
 }
 
+/* Custom Scrollbar Styles */
 .scrollbar-thin::-webkit-scrollbar {
   width: 6px;
 }
+
 .scrollbar-thin::-webkit-scrollbar-thumb {
-  @apply bg-slate-300 rounded-full;
+  @apply bg-slate-300 dark:bg-slate-700 rounded-full;
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Upload, FileText, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -17,6 +17,7 @@ interface DocumentRow {
 export default function DocumentsPage() {
   const [documents, setDocuments] = useState<DocumentRow[] | null>(null);
   const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
     const res = await fetch("/api/documents");
@@ -51,53 +52,66 @@ export default function DocumentsPage() {
   }
 
   return (
-    <div className="mx-auto max-w-3xl px-6 py-12">
-      <div className="flex items-center justify-between">
+    <div className="mx-auto max-w-3xl px-6 py-12 text-textPrimary">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-navy-900">Documents</h1>
-          <p className="mt-1 text-sm text-slate-500">
+          <h1 className="text-2xl font-semibold text-textPrimary">Documents</h1>
+          <p className="mt-1 text-sm text-textSecondary">
             Upload a legal notice, agreement, or letter to get a plain-language explanation.
           </p>
         </div>
-        <label>
+
+        <div>
           <input
             type="file"
+            ref={fileInputRef}
             accept=".pdf,.docx,.txt,.jpg,.jpeg,.png"
             className="hidden"
             onChange={handleUpload}
           />
-          <Button variant="brand" className="gap-2" disabled={uploading}>
-            {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
-            Upload
+          <Button
+            onClick={() => fileInputRef.current?.click()}
+            className="gap-2 bg-brandBlue text-white hover:bg-brandBlue/90 shadow-sm"
+            disabled={uploading}
+          >
+            {uploading ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Upload className="h-4 w-4" />
+            )}
+            {uploading ? "Uploading..." : "Upload"}
           </Button>
-        </label>
+        </div>
       </div>
 
       <div className="mt-8 space-y-3">
         {documents === null && (
-          <p className="text-sm text-slate-400">Loading documents...</p>
+          <p className="text-sm text-textSecondary">Loading documents...</p>
         )}
 
         {documents !== null && documents.length === 0 && (
-          <Card>
+          <Card className="bg-card border-borderCustom shadow-sm">
             <CardContent className="flex flex-col items-center gap-2 py-12 text-center">
-              <FileText className="h-8 w-8 text-slate-300" />
-              <p className="text-sm text-slate-500">No documents yet.</p>
-              <p className="text-xs text-slate-400">
-                Upload a PDF, DOCX, TXT, or image to get started.
+              <FileText className="h-8 w-8 text-textSecondary opacity-40" />
+              <p className="text-sm font-medium text-textPrimary">No documents yet.</p>
+              <p className="text-xs text-textSecondary max-w-sm">
+                Upload a PDF, DOCX, TXT, or image to get started with plain-language analysis.
               </p>
             </CardContent>
           </Card>
         )}
 
         {documents?.map((doc) => (
-          <Card key={doc.id}>
+          <Card
+            key={doc.id}
+            className="bg-card border-borderCustom shadow-sm transition-colors hover:border-brandBlue/40"
+          >
             <CardContent className="flex items-center justify-between p-4">
               <div className="flex items-center gap-3">
-                <FileText className="h-5 w-5 text-brand-500" />
-                <span className="text-sm font-medium text-navy-900">{doc.title}</span>
+                <FileText className="h-5 w-5 text-brandBlue shrink-0" />
+                <span className="text-sm font-medium text-textPrimary">{doc.title}</span>
               </div>
-              <Badge variant={doc.status === "READY" ? "success" : "default"}>
+              <Badge className="border border-borderCustom bg-canvas text-textPrimary shadow-none">
                 {doc.status}
               </Badge>
             </CardContent>
