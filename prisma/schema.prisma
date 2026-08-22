@@ -118,6 +118,7 @@ model User {
   auditLogs     AuditLog[]
   feedback      Feedback[]
   notifications Notification[]
+  legalDocuments LegalDocument[]
 
   @@index([email])
 }
@@ -414,4 +415,39 @@ model Notification {
 
   @@index([userId])
   @@index([read])
+}
+
+// ---------------- LEGAL DOCUMENTS (OCR + AI analysis pipeline) ----------------
+
+enum LegalDocumentCategory {
+  LEGAL_NOTICE
+  FIR_POLICE_DOC
+  COURT_ORDER
+}
+
+enum AnalysisStatus {
+  PENDING
+  COMPLETE
+  DEGRADED
+}
+
+model LegalDocument {
+  id                String                @id @default(uuid())
+  userId            String
+  category          LegalDocumentCategory
+  fileName          String
+  fileSizeKb        Int
+  storagePath       String
+  ocrText           String                @db.Text
+  ocrConfidence     Int
+  ocrConfidenceNote String?
+  analysisStatus    AnalysisStatus        @default(PENDING)
+  analysisJson      Json?
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([analysisStatus])
 }

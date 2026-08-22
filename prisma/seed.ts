@@ -11,7 +11,7 @@ const prisma = new PrismaClient();
 async function main() {
   console.log("Seeding demo data...");
 
-  const passwordHash = await bcrypt.hash("Demo@12345", 12);
+  const passwordHash = await bcrypt.hash("demo@123", 12);
 
   const demoUser = await prisma.user.upsert({
     where: { email: "demo@legalsetu.example" },
@@ -68,7 +68,9 @@ async function main() {
   });
 
   console.log({ demoUser: demoUser.email, adminUser: adminUser.email, source: source.title });
-  console.log("Seed complete. Demo login: demo@legalsetu.example / Demo@12345");
+  console.log("Seed complete.");
+  console.log("Demo login:  demo@legalsetu.example / demo@123");
+  console.log("Admin login: admin@legalsetu.example / demo@123");
 }
 
 main()

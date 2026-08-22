@@ -27,8 +27,8 @@ const nextConfig: NextConfig = {
           {
             key: "Content-Security-Policy",
             value: process.env.NODE_ENV === "development"
-              ? "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://grainy-gradients.vercel.app; connect-src 'self' https:; frame-ancestors 'none';"
-              : "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://grainy-gradients.vercel.app; connect-src 'self' https:; frame-ancestors 'none';",
+              ? "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; worker-src 'self' blob: https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://grainy-gradients.vercel.app; font-src 'self' data:; connect-src 'self' https:; frame-ancestors 'none';"
+              : "default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; worker-src 'self' blob: https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://grainy-gradients.vercel.app; font-src 'self' data:; connect-src 'self' https: https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://tessdata.projectnaptha.com; frame-ancestors 'none';",
           },
         ],
       },
