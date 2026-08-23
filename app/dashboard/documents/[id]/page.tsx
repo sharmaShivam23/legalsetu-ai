@@ -1,11 +1,12 @@
 // app/dashboard/documents/[id]/page.tsx
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Disclaimer } from "@/components/common/disclaimer";
+import { OcrStepper, type OcrStep } from "@/components/documents/ocr-stepper";
 import { DOC_CATEGORIES, type DocCategory } from "@/app/dashboard/documents/page";
 
 interface AnalysisResult {
@@ -27,6 +28,8 @@ interface DocumentRecord {
   analysis: AnalysisResult | null;
 }
 
+type Phase = "loading-doc" | "analyzing" | "done" | "error";
+
 // Handles the value coming back as either the hyphenated UI form
 // ("legal-notice") or the raw Prisma enum ("LEGAL_NOTICE") — whichever
 // the API actually sends, this always resolves to a valid DOC_CATEGORIES
@@ -43,15 +46,59 @@ function normalizeCategory(raw: string | null | undefined): DocCategory {
   return FALLBACK;
 }
 
+// Builds the pipeline steps shown at the top of the page for the current
+// phase. Upload + OCR are always shown as already complete on this page
+// (both happened on the previous /dashboard/documents screen before the
+// user ever landed here) — this page only ever runs "AI Upload" (sending
+// the extracted text to the AI provider) and "AI Analysis" (waiting for
+// and receiving the structured result) itself.
+function buildSteps(phase: Phase): OcrStep[] {
+  const aiUploadDone = phase !== "loading-doc";
+  return [
+    { label: "Upload", description: "Document received", status: "complete" },
+    { label: "Extract Text", description: "OCR complete", status: "complete" },
+    {
+      label: "AI Upload",
+      description: aiUploadDone ? "Sent to AI" : "Waiting…",
+      status: phase === "loading-doc" ? "pending" : "complete",
+    },
+    {
+      label: "AI Analysis",
+      description:
+        phase === "analyzing" ? "Running now…" : phase === "error" ? "Failed" : phase === "done" ? "Complete" : "Waiting…",
+      status:
+        phase === "loading-doc"
+          ? "pending"
+          : phase === "analyzing"
+            ? "active"
+            : phase === "error"
+              ? "error"
+              : "complete",
+    },
+  ];
+}
+
 export default function DocumentDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const [doc, setDoc] = useState<DocumentRecord | null>(null);
   const [showExtractedText, setShowExtractedText] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [phase, setPhase] = useState<Phase>("loading-doc");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
+  // React Strict Mode (dev only) double-invokes effects. Without this guard,
+  // a second overlapping run could fire its own GET /documents/:id (which
+  // still shows analysis: null, since the first run's POST /analyze hasn't
+  // saved yet) and overwrite the in-flight result with a stale null via
+  // setDoc(docData) — silently erasing the analysis the first run was about
+  // to receive. This ref ensures the load-and-analyze sequence only ever
+  // actually runs once per document id, in dev and prod alike.
+  const hasRunForId = useRef<string | null>(null);
+
   useEffect(() => {
+    if (hasRunForId.current === id) return;
+    hasRunForId.current = id;
+
     async function load() {
       try {
         const res = await fetch(`/api/documents/${id}`);
@@ -66,34 +113,45 @@ export default function DocumentDetailPage() {
 
         // Trigger analysis if it hasn't run yet.
         if (!docData.analysis) {
+          setPhase("analyzing");
           const analyzeRes = await fetch(`/api/documents/${id}/analyze`, { method: "POST" });
+          if (!analyzeRes.ok) throw new Error("Analysis failed. Please try again.");
           const analyzeJson = await analyzeRes.json();
           const result: AnalysisResult | undefined = analyzeJson?.data?.result;
-          if (result) {
-            setDoc((prev) => (prev ? { ...prev, analysis: result } : prev));
-          }
+          if (!result) throw new Error("Analysis didn't return a result. Please try again.");
+          setDoc((prev) => (prev ? { ...prev, analysis: result } : prev));
         }
+        setPhase("done");
       } catch (err) {
         setErrorMsg(err instanceof Error ? err.message : "Something went wrong.");
-      } finally {
-        setLoading(false);
+        setPhase("error");
       }
     }
     load();
   }, [id]);
 
-  if (loading) {
+  if (phase === "error" || (phase !== "loading-doc" && phase !== "analyzing" && !doc)) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-white">
-        <p className="text-sky-500">Analyzing your document…</p>
+        <p className="text-red-500">{errorMsg || "Document not found."}</p>
       </div>
     );
   }
 
-  if (errorMsg || !doc) {
+  if (phase === "loading-doc" || !doc) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-white">
-        <p className="text-red-500">{errorMsg || "Document not found."}</p>
+      <div className="min-h-screen bg-white">
+        <header className="border-b border-sky-100 bg-white px-6 py-5">
+          <p className="text-sm text-sky-500">LegalSetu &rsaquo; Document OCR</p>
+          <h1 className="text-2xl font-bold text-slate-900">Document OCR</h1>
+        </header>
+        <main className="mx-auto max-w-3xl px-6 py-8">
+          <OcrStepper steps={buildSteps("loading-doc")} />
+          <div className="animate-pulse space-y-3">
+            <div className="h-5 w-1/3 rounded bg-sky-100" />
+            <div className="h-24 w-full rounded-xl bg-sky-50" />
+          </div>
+        </main>
       </div>
     );
   }
@@ -109,6 +167,8 @@ export default function DocumentDetailPage() {
       </header>
 
       <main className="mx-auto max-w-3xl px-6 py-8">
+        <OcrStepper steps={buildSteps(phase)} />
+
         <Button variant="ghost" className="mb-4 text-sky-600" onClick={() => router.push("/dashboard/documents")}>
           ← Back
         </Button>
@@ -159,7 +219,11 @@ export default function DocumentDetailPage() {
             </div>
           </Card>
         ) : (
-          <p className="text-sky-500">Generating AI summary…</p>
+          <Card className="border-sky-100 bg-sky-50/40 p-6 text-center">
+            <div className="mx-auto mb-3 h-8 w-8 animate-spin rounded-full border-2 border-sky-200 border-t-sky-500" />
+            <p className="font-medium text-sky-700">Generating AI summary…</p>
+            <p className="mt-1 text-sm text-slate-500">This usually takes a few seconds.</p>
+          </Card>
         )}
       </main>
     </div>
