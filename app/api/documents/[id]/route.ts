@@ -1,12 +1,8 @@
 // app/api/documents/[id]/route.ts
-//
-// Resolves your open issue: "confirming whether GET /api/documents/[id]
-// exists as a single-document endpoint (blocks the detail page flow)".
 
 import { NextRequest } from "next/server";
 import { auth } from "@/lib/auth/auth";
 import { prisma } from "@/lib/db/prisma";
-import { DOCUMENT_CATEGORY_FROM_DB } from "@/lib/validation/schemas";
 import { apiSuccess, apiError } from "@/lib/utils/api-response";
 
 export const runtime = "nodejs";
@@ -19,9 +15,8 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
 
   const { id } = await params;
 
-  const doc = await prisma.legalDocument.findFirst({
-    // findFirst + userId filter (not findUnique by id alone) so a user
-    // can never fetch another user's document by guessing an id.
+  // FIXED: Changed to prisma.document
+  const doc = await prisma.document.findFirst({
     where: { id, userId: session.user.id },
   });
 
@@ -29,20 +24,24 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     return apiError("not_found", "Document not found.", 404);
   }
 
+  // FIXED: Mapped to your schema's actual fields (title, sizeBytes, extractedText, summary)
+  let analysis = null;
+  if (doc.summary && (doc.status === "READY" || doc.status === "FAILED")) {
+    try {
+      analysis = JSON.parse(doc.summary);
+    } catch (e) {
+      console.error("Could not parse document summary JSON");
+    }
+  }
+
   return apiSuccess({
     id: doc.id,
-    fileName: doc.fileName,
-    fileSizeKb: doc.fileSizeKb,
-    category: DOCUMENT_CATEGORY_FROM_DB[doc.category],
-    ocrText: doc.ocrText,
-    ocrConfidenceNote: doc.ocrConfidenceNote,
-    analysisStatus: doc.analysisStatus,
-    // Both COMPLETE and DEGRADED results are cached and returned as-is —
-    // only PENDING (never attempted) comes back null. This means a
-    // DEGRADED ("Not detected") result is NOT auto-retried on every page
-    // load (that would burn an AI call per visit); the client instead
-    // shows the cached result with a manual "Re-analyze" button.
-    analysis: doc.analysisStatus === "PENDING" ? null : doc.analysisJson,
+    fileName: doc.title, 
+    fileSizeKb: Math.round(doc.sizeBytes / 1024),
+    category: doc.fileType,
+    ocrText: doc.extractedText || "",
+    analysisStatus: doc.status,
+    analysis: analysis,
   });
 }
 
@@ -54,13 +53,15 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
 
   const { id } = await params;
 
-  const doc = await prisma.legalDocument.findFirst({
+  // FIXED: Changed to prisma.document
+  const doc = await prisma.document.findFirst({
     where: { id, userId: session.user.id },
   });
+  
   if (!doc) {
     return apiError("not_found", "Document not found.", 404);
   }
 
-  await prisma.legalDocument.delete({ where: { id: doc.id } });
+  await prisma.document.delete({ where: { id: doc.id } });
   return apiSuccess({ deleted: true });
 }

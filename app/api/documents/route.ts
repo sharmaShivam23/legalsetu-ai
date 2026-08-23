@@ -1,9 +1,4 @@
 // app/api/documents/route.ts
-//
-// POST — accepts multipart FormData (file, category, ocrText, ocrConfidence),
-//        validates + stores the file via lib/storage/storage.ts, creates the
-//        LegalDocument row, returns { id }.
-// GET  — lists the current user's documents.
 
 import { NextRequest } from "next/server";
 import { auth } from "@/lib/auth/auth";
@@ -11,14 +6,18 @@ import { prisma } from "@/lib/db/prisma";
 import { getStorageProvider } from "@/lib/storage/storage";
 import { sanitizeFilename, validateUploadedFile } from "@/lib/security/sanitize";
 import { checkRateLimit } from "@/lib/security/rate-limit";
-import {
-  createDocumentSchema,
-  DOCUMENT_CATEGORY_TO_DB,
-  DOCUMENT_CATEGORY_FROM_DB,
-} from "@/lib/validation/schemas";
+import { createDocumentSchema } from "@/lib/validation/schemas";
 import { apiSuccess, apiError } from "@/lib/utils/api-response";
 
 export const runtime = "nodejs";
+
+// Helper function to map standard MIME types to your Prisma DocumentType enum
+function getFileType(mimeType: string) {
+  if (mimeType.includes("pdf")) return "PDF";
+  if (mimeType.includes("image")) return "IMAGE";
+  if (mimeType.includes("word") || mimeType.includes("docx") || mimeType.includes("document")) return "DOCX";
+  return "TXT";
+}
 
 export async function POST(req: NextRequest) {
   const session = await auth();
@@ -49,8 +48,6 @@ export async function POST(req: NextRequest) {
 
     const originalName = (file as File).name ?? "upload";
 
-    // Use your existing MIME/extension/size validator rather than
-    // duplicating the checks here.
     const validation = validateUploadedFile({
       name: originalName,
       type: file.type,
@@ -67,17 +64,21 @@ export async function POST(req: NextRequest) {
     const key = `legal-documents/${session.user.id}/${Date.now()}-${safeName}`;
     const storagePath = await storage.upload(key, buffer, file.type);
 
-    const doc = await prisma.legalDocument.create({
+    // FIXED: Maps data to your current Prisma `Document` model schema
+    const doc = await prisma.document.create({
       data: {
         userId: session.user.id,
-        category: DOCUMENT_CATEGORY_TO_DB[parsed.data.category],
-        fileName: safeName,
-        fileSizeKb: Math.round(file.size / 1024),
-        storagePath,
-        ocrText: parsed.data.ocrText,
-        ocrConfidence: parsed.data.ocrConfidence,
-        ocrConfidenceNote: buildConfidenceNote(parsed.data.ocrConfidence),
-        analysisStatus: "PENDING",
+        title: safeName,                     // Replaces fileName
+        sizeBytes: file.size,                // Replaces fileSizeKb
+        storageKey: storagePath,             // Replaces storagePath
+        fileType: getFileType(file.type),    // Replaces category logic
+        status: "UPLOADED",                  // Replaces analysisStatus
+        extractedText: parsed.data.ocrText,
+        // Optional: Storing the old extra fields in the JSON summary just in case the UI needs them
+        summary: JSON.stringify({ 
+          ocrConfidence: parsed.data.ocrConfidence, 
+          originalCategory: parsed.data.category 
+        }),
       },
     });
 
@@ -97,30 +98,29 @@ export async function GET(req: NextRequest) {
     return apiError("unauthorized", "You must be signed in.", 401);
   }
 
-  const docs = await prisma.legalDocument.findMany({
-    where: { userId: session.user.id }, // per-user isolation at the query layer
+  // FIXED: Fetching from prisma.document
+  const docs = await prisma.document.findMany({
+    where: { userId: session.user.id }, 
     orderBy: { createdAt: "desc" },
     select: {
       id: true,
-      category: true,
-      fileName: true,
-      fileSizeKb: true,
-      analysisStatus: true,
+      fileType: true,
+      title: true,
+      sizeBytes: true,
+      status: true,
       createdAt: true,
     },
   });
 
+  // FIXED: Mapping back to the frontend's expected properties
   return apiSuccess({
-    documents: docs.map((d: (typeof docs)[number]) => ({
-      ...d,
-      category: DOCUMENT_CATEGORY_FROM_DB[d.category],
+    documents: docs.map((d) => ({
+      id: d.id,
+      category: d.fileType,
+      fileName: d.title,
+      fileSizeKb: Math.round(d.sizeBytes / 1024),
+      analysisStatus: d.status,
+      createdAt: d.createdAt,
     })),
   });
-}
-
-function buildConfidenceNote(confidence: number): string {
-  if (confidence === 0) return "No readable text was extracted.";
-  if (confidence < 55) return "OCR confidence is low — please review the extracted text carefully.";
-  if (confidence < 75) return "OCR confidence is moderate. Some words may be misread.";
-  return "OCR confidence is good.";
 }
