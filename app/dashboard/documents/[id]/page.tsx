@@ -18,6 +18,8 @@ interface AnalysisResult {
   nextSteps: string[];
 }
 
+type AnalysisStatus = "PENDING" | "COMPLETE" | "DEGRADED";
+
 interface DocumentRecord {
   id: string;
   fileName: string;
@@ -25,6 +27,7 @@ interface DocumentRecord {
   category: string; // widened — raw server value isn't guaranteed to already match DocCategory
   ocrText: string;
   ocrConfidenceNote: string;
+  analysisStatus: AnalysisStatus;
   analysis: AnalysisResult | null;
 }
 
@@ -86,6 +89,22 @@ export default function DocumentDetailPage() {
   const [phase, setPhase] = useState<Phase>("loading-doc");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
+  // True only while a manual "Re-analyze" click is in flight, so the button
+  // can show its own "Re-analyzing…" state distinct from the very first
+  // automatic analysis run.
+  const [isReanalyzing, setIsReanalyzing] = useState(false);
+
+  // Countdown (seconds) while the AI provider's quota is exhausted. When
+  // > 0, the Re-analyze button is disabled and shows a live countdown
+  // instead of letting the user hammer a request that will just 429 again.
+  const [quotaCooldown, setQuotaCooldown] = useState(0);
+
+  useEffect(() => {
+    if (quotaCooldown <= 0) return;
+    const t = setTimeout(() => setQuotaCooldown((s) => Math.max(0, s - 1)), 1000);
+    return () => clearTimeout(t);
+  }, [quotaCooldown]);
+
   // React Strict Mode (dev only) double-invokes effects. Without this guard,
   // a second overlapping run could fire its own GET /documents/:id (which
   // still shows analysis: null, since the first run's POST /analyze hasn't
@@ -94,6 +113,24 @@ export default function DocumentDetailPage() {
   // to receive. This ref ensures the load-and-analyze sequence only ever
   // actually runs once per document id, in dev and prod alike.
   const hasRunForId = useRef<string | null>(null);
+
+  async function runAnalyze(force: boolean): Promise<{ result: AnalysisResult; degraded: boolean }> {
+    const analyzeRes = await fetch(`/api/documents/${id}/analyze${force ? "?force=1" : ""}`, {
+      method: "POST",
+    });
+
+    if (analyzeRes.status === 429) {
+      const body = await analyzeRes.json().catch(() => ({}) as any);
+      setQuotaCooldown(body?.retryDelaySeconds ?? 60);
+      throw new Error(body?.message ?? "The AI service is at its usage limit right now. Please try again shortly.");
+    }
+
+    if (!analyzeRes.ok) throw new Error("Analysis failed. Please try again.");
+    const analyzeJson = await analyzeRes.json();
+    const result: AnalysisResult | undefined = analyzeJson?.data?.result;
+    if (!result) throw new Error("Analysis didn't return a result. Please try again.");
+    return { result, degraded: !!analyzeJson?.data?.degraded };
+  }
 
   useEffect(() => {
     if (hasRunForId.current === id) return;
@@ -111,15 +148,16 @@ export default function DocumentDetailPage() {
         if (!docData) throw new Error("Couldn't load this document.");
         setDoc(docData);
 
-        // Trigger analysis if it hasn't run yet.
-        if (!docData.analysis) {
+        // Only auto-run analysis the very first time (analysisStatus is
+        // PENDING, meaning it's never been attempted). A DEGRADED result
+        // is a cached "Not detected" outcome from a prior attempt — it is
+        // shown as-is, with a manual "Re-analyze" button, instead of
+        // silently re-calling the AI provider (and burning quota) on
+        // every page load.
+        if (docData.analysisStatus === "PENDING" || !docData.analysis) {
           setPhase("analyzing");
-          const analyzeRes = await fetch(`/api/documents/${id}/analyze`, { method: "POST" });
-          if (!analyzeRes.ok) throw new Error("Analysis failed. Please try again.");
-          const analyzeJson = await analyzeRes.json();
-          const result: AnalysisResult | undefined = analyzeJson?.data?.result;
-          if (!result) throw new Error("Analysis didn't return a result. Please try again.");
-          setDoc((prev) => (prev ? { ...prev, analysis: result } : prev));
+          const { result } = await runAnalyze(false);
+          setDoc((prev) => (prev ? { ...prev, analysis: result, analysisStatus: "COMPLETE" } : prev));
         }
         setPhase("done");
       } catch (err) {
@@ -129,6 +167,21 @@ export default function DocumentDetailPage() {
     }
     load();
   }, [id]);
+
+  async function handleReanalyze() {
+    setIsReanalyzing(true);
+    setErrorMsg(null);
+    try {
+      const { result, degraded } = await runAnalyze(true);
+      setDoc((prev) =>
+        prev ? { ...prev, analysis: result, analysisStatus: degraded ? "DEGRADED" : "COMPLETE" } : prev
+      );
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : "Re-analysis failed. Please try again.");
+    } finally {
+      setIsReanalyzing(false);
+    }
+  }
 
   if (phase === "error" || (phase !== "loading-doc" && phase !== "analyzing" && !doc)) {
     return (
@@ -158,6 +211,7 @@ export default function DocumentDetailPage() {
 
   const categoryKey = normalizeCategory(doc.category);
   const category = DOC_CATEGORIES[categoryKey];
+  const isDegraded = doc.analysisStatus === "DEGRADED";
 
   return (
     <div className="min-h-screen bg-white">
@@ -196,10 +250,19 @@ export default function DocumentDetailPage() {
 
         {doc.analysis ? (
           <Card className="border-sky-100 p-0 overflow-hidden">
-            <div className="bg-sky-500 px-6 py-3">
-              <h3 className="font-semibold text-white">AI Summary</h3>
+            <div className={isDegraded ? "bg-amber-500 px-6 py-3" : "bg-sky-500 px-6 py-3"}>
+              <h3 className="font-semibold text-white">
+                {isDegraded ? "AI Summary — Not Available" : "AI Summary"}
+              </h3>
             </div>
             <div className="space-y-5 px-6 py-6">
+              {isDegraded && (
+                <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-800">
+                  The AI couldn't analyze this document last time. You can try again below — this
+                  won't re-run automatically on future visits, to save on AI usage.
+                </p>
+              )}
+
               <Field label="Case Name" value={doc.analysis.caseName} />
               <Field label="Judge" value={doc.analysis.judge} />
               <Field label="Date" value={doc.analysis.date} />
@@ -209,13 +272,30 @@ export default function DocumentDetailPage() {
 
               <Disclaimer />
 
-              <Button
-                variant="outline"
-                className="border-sky-300 text-sky-700"
-                onClick={() => router.push("/dashboard/documents")}
-              >
-                Analyze Another {category.label}
-              </Button>
+              <div className="flex flex-wrap gap-3">
+                {isDegraded && (
+                  <Button
+                    className="bg-sky-500 text-white hover:bg-sky-600"
+                    onClick={handleReanalyze}
+                    disabled={isReanalyzing || quotaCooldown > 0}
+                  >
+                    {isReanalyzing
+                      ? "Re-analyzing…"
+                      : quotaCooldown > 0
+                        ? `Try again in ${quotaCooldown}s`
+                        : "Re-analyze"}
+                  </Button>
+                )}
+                <Button
+                  variant="outline"
+                  className="border-sky-300 text-sky-700"
+                  onClick={() => router.push("/dashboard/documents")}
+                >
+                  Analyze Another {category.label}
+                </Button>
+              </div>
+
+              {errorMsg && <p className="text-sm text-red-500">{errorMsg}</p>}
             </div>
           </Card>
         ) : (

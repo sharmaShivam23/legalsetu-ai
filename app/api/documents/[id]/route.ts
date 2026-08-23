@@ -36,6 +36,12 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     category: DOCUMENT_CATEGORY_FROM_DB[doc.category],
     ocrText: doc.ocrText,
     ocrConfidenceNote: doc.ocrConfidenceNote,
+    analysisStatus: doc.analysisStatus,
+    // Both COMPLETE and DEGRADED results are cached and returned as-is —
+    // only PENDING (never attempted) comes back null. This means a
+    // DEGRADED ("Not detected") result is NOT auto-retried on every page
+    // load (that would burn an AI call per visit); the client instead
+    // shows the cached result with a manual "Re-analyze" button.
     analysis: doc.analysisStatus === "PENDING" ? null : doc.analysisJson,
   });
 }

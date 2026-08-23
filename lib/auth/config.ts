@@ -1,3 +1,4 @@
+// lib/auth/config.ts
 import Credentials from "next-auth/providers/credentials";
 import type { NextAuthConfig } from "next-auth";
 import bcrypt from "bcryptjs";
@@ -6,6 +7,7 @@ import { loginSchema } from "@/lib/validation/schemas";
 import { logger } from "@/lib/logging/logger";
 
 export const authConfig: NextAuthConfig = {
+  trustHost: true,
   pages: {
     signIn: "/login",
   },

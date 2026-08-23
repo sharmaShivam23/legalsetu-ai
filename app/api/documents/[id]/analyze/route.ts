@@ -5,7 +5,7 @@
 // method — never a vendor SDK directly — so demo mode (MockProvider) and
 // provider swaps (Gemini/OpenAI) work with zero changes here.
 
-import { NextRequest } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth/auth";
 import { prisma } from "@/lib/db/prisma";
 import { getAIProvider } from "@/lib/ai/provider";
@@ -78,6 +78,32 @@ ${ocrText.slice(0, 12000)}
 --- END EXTRACTED TEXT ---`;
 }
 
+// Detects a quota/rate-limit failure from the upstream provider, regardless
+// of which provider is active. Google's SDK errors carry either a numeric
+// `.status`/`.code` of 429, or the string "RESOURCE_EXHAUSTED" somewhere in
+// the message; OpenAI's SDK throws a `.status === 429` too, so checking
+// both the message text and any status/code property covers both without
+// importing either vendor SDK's error types directly.
+function isQuotaError(err: unknown): { quota: true; retryDelaySeconds: number | null } | { quota: false } {
+  const message = err instanceof Error ? err.message : String(err);
+  const status = (err as any)?.status ?? (err as any)?.code;
+
+  const looksLikeQuota =
+    status === 429 ||
+    /RESOURCE_EXHAUSTED/i.test(message) ||
+    /rate.?limit/i.test(message) ||
+    /quota/i.test(message);
+
+  if (!looksLikeQuota) return { quota: false };
+
+  // Try to pull a retryDelay out of the raw error message/body, e.g.
+  // Google's error includes `"retryDelay":"37s"` in its JSON payload.
+  const match = message.match(/retryDelay["']?\s*[:=]\s*["']?(\d+)s/i);
+  const retryDelaySeconds = match ? parseInt(match[1], 10) : null;
+
+  return { quota: true, retryDelaySeconds };
+}
+
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await auth();
   if (!session?.user?.id) {
@@ -91,6 +117,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
   const { id } = await params;
 
+  // Explicit opt-in for re-running an already-attempted analysis, e.g. a
+  // "Re-analyze" button in the UI (`POST /analyze?force=1`). Without this,
+  // a DEGRADED result is treated as cached/final — the client never
+  // silently re-triggers a paid AI call just by loading the page again.
+  const force = req.nextUrl.searchParams.get("force") === "1";
+
   const doc = await prisma.legalDocument.findFirst({
     where: { id, userId: session.user.id },
   });
@@ -98,8 +130,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     return apiError("not_found", "Document not found.", 404);
   }
 
-  // Idempotent — if analysis already completed, just return it.
-  if (doc.analysisStatus === "COMPLETE" && doc.analysisJson) {
+  // Idempotent — if analysis already completed, just return it, unless the
+  // caller explicitly asked to force a re-run.
+  if (doc.analysisStatus === "COMPLETE" && doc.analysisJson && !force) {
     return apiSuccess({ result: doc.analysisJson, degraded: false });
   }
 
@@ -135,8 +168,28 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
     return apiSuccess({ result: analysis, degraded: false });
   } catch (err) {
-    // Model error, timeout, bad JSON, schema mismatch — degrade gracefully
-    // to "Not detected" fields instead of failing the whole request.
+    const quotaCheck = isQuotaError(err);
+
+    // Quota/rate-limit failures are NOT written to the document as a
+    // DEGRADED "Not detected" result — the AI never actually got a chance
+    // to look at the text, so caching a wrong "not found" answer would be
+    // misleading. The document's analysisStatus stays whatever it was
+    // (PENDING, so the next real attempt is treated as the first one).
+    if (quotaCheck.quota) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "quota_exceeded",
+          message: "The AI analysis service has hit its usage limit for now. Please try again in a bit.",
+          retryDelaySeconds: quotaCheck.retryDelaySeconds,
+          errorDetail: err instanceof Error ? err.message : "unknown_error",
+        },
+        { status: 429 }
+      );
+    }
+
+    // Any other model error, timeout, bad JSON, schema mismatch — degrade
+    // gracefully to "Not detected" fields instead of failing the request.
     const fallback = fallbackAnalysisResult();
 
     await prisma.legalDocument.update({
