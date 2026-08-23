@@ -15,7 +15,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en" suppressHydrationWarning>
       <body className="font-sans">
         <AuthSessionProvider>
-          <ThemeProvider attribute="class" defaultTheme="dark" enableSystem>
+          <ThemeProvider attribute="class" defaultTheme="dark" enableSystem={false}>
             {children}
             <Toaster position="top-center" richColors />
           </ThemeProvider>

@@ -1,13 +1,26 @@
-// app/dashboard/documents/[id]/page.tsx
 "use client";
 
 import { useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Disclaimer } from "@/components/common/disclaimer";
 import { OcrStepper, type OcrStep } from "@/components/documents/ocr-stepper";
 import { DOC_CATEGORIES, type DocCategory } from "@/app/dashboard/documents/page";
+import { 
+  ArrowLeft, 
+  Cpu, 
+  RefreshCw, 
+  FileText, 
+  ChevronDown, 
+  ChevronUp, 
+  ShieldAlert,
+  Sparkles,
+  CheckCircle2,
+  ListChecks,
+  AlertTriangle,
+  FileCheck2
+} from "lucide-react";
 
 interface AnalysisResult {
   caseName: string;
@@ -24,7 +37,7 @@ interface DocumentRecord {
   id: string;
   fileName: string;
   fileSizeKb: number;
-  category: string; // widened — raw server value isn't guaranteed to already match DocCategory
+  category: string;
   ocrText: string;
   ocrConfidenceNote: string;
   analysisStatus: AnalysisStatus;
@@ -33,28 +46,15 @@ interface DocumentRecord {
 
 type Phase = "loading-doc" | "analyzing" | "done" | "error";
 
-// Handles the value coming back as either the hyphenated UI form
-// ("legal-notice") or the raw Prisma enum ("LEGAL_NOTICE") — whichever
-// the API actually sends, this always resolves to a valid DOC_CATEGORIES
-// entry so the page can never crash on category.icon/.label again.
 function normalizeCategory(raw: string | null | undefined): DocCategory {
   const FALLBACK: DocCategory = "legal-notice";
   if (!raw) return FALLBACK;
-
   if (raw in DOC_CATEGORIES) return raw as DocCategory;
-
   const hyphenated = raw.toLowerCase().replace(/_/g, "-");
   if (hyphenated in DOC_CATEGORIES) return hyphenated as DocCategory;
-
   return FALLBACK;
 }
 
-// Builds the pipeline steps shown at the top of the page for the current
-// phase. Upload + OCR are always shown as already complete on this page
-// (both happened on the previous /dashboard/documents screen before the
-// user ever landed here) — this page only ever runs "AI Upload" (sending
-// the extracted text to the AI provider) and "AI Analysis" (waiting for
-// and receiving the structured result) itself.
 function buildSteps(phase: Phase): OcrStep[] {
   const aiUploadDone = phase !== "loading-doc";
   return [
@@ -67,16 +67,8 @@ function buildSteps(phase: Phase): OcrStep[] {
     },
     {
       label: "AI Analysis",
-      description:
-        phase === "analyzing" ? "Running now…" : phase === "error" ? "Failed" : phase === "done" ? "Complete" : "Waiting…",
-      status:
-        phase === "loading-doc"
-          ? "pending"
-          : phase === "analyzing"
-            ? "active"
-            : phase === "error"
-              ? "error"
-              : "complete",
+      description: phase === "analyzing" ? "Running now…" : phase === "error" ? "Failed" : phase === "done" ? "Complete" : "Waiting…",
+      status: phase === "loading-doc" ? "pending" : phase === "analyzing" ? "active" : phase === "error" ? "error" : "complete",
     },
   ];
 }
@@ -88,15 +80,7 @@ export default function DocumentDetailPage() {
   const [showExtractedText, setShowExtractedText] = useState(false);
   const [phase, setPhase] = useState<Phase>("loading-doc");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-
-  // True only while a manual "Re-analyze" click is in flight, so the button
-  // can show its own "Re-analyzing…" state distinct from the very first
-  // automatic analysis run.
   const [isReanalyzing, setIsReanalyzing] = useState(false);
-
-  // Countdown (seconds) while the AI provider's quota is exhausted. When
-  // > 0, the Re-analyze button is disabled and shows a live countdown
-  // instead of letting the user hammer a request that will just 429 again.
   const [quotaCooldown, setQuotaCooldown] = useState(0);
 
   useEffect(() => {
@@ -105,13 +89,6 @@ export default function DocumentDetailPage() {
     return () => clearTimeout(t);
   }, [quotaCooldown]);
 
-  // React Strict Mode (dev only) double-invokes effects. Without this guard,
-  // a second overlapping run could fire its own GET /documents/:id (which
-  // still shows analysis: null, since the first run's POST /analyze hasn't
-  // saved yet) and overwrite the in-flight result with a stale null via
-  // setDoc(docData) — silently erasing the analysis the first run was about
-  // to receive. This ref ensures the load-and-analyze sequence only ever
-  // actually runs once per document id, in dev and prod alike.
   const hasRunForId = useRef<string | null>(null);
 
   async function runAnalyze(force: boolean): Promise<{ result: AnalysisResult; degraded: boolean }> {
@@ -140,20 +117,11 @@ export default function DocumentDetailPage() {
       try {
         const res = await fetch(`/api/documents/${id}`);
         if (!res.ok) throw new Error("Couldn't load this document.");
-
-        // apiSuccess() wraps every response as { success: true, data: {...} } —
-        // the real document payload is under `.data`, not top-level.
         const json = await res.json();
         const docData: DocumentRecord | undefined = json?.data;
         if (!docData) throw new Error("Couldn't load this document.");
         setDoc(docData);
 
-        // Only auto-run analysis the very first time (analysisStatus is
-        // PENDING, meaning it's never been attempted). A DEGRADED result
-        // is a cached "Not detected" outcome from a prior attempt — it is
-        // shown as-is, with a manual "Re-analyze" button, instead of
-        // silently re-calling the AI provider (and burning quota) on
-        // every page load.
         if (docData.analysisStatus === "PENDING" || !docData.analysis) {
           setPhase("analyzing");
           const { result } = await runAnalyze(false);
@@ -183,144 +151,289 @@ export default function DocumentDetailPage() {
     }
   }
 
+  // --- RENDERING HELPERS ---
+  const renderBackground = () => (
+    <>
+      <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-[0.03] mix-blend-overlay pointer-events-none z-0"></div>
+      <div className="absolute top-0 left-1/4 h-[500px] w-[600px] rounded-full bg-blue-500/10 dark:bg-blue-600/10 blur-[120px] pointer-events-none transition-colors duration-500 z-0"></div>
+      <div className="absolute bottom-1/4 right-1/4 h-[400px] w-[500px] rounded-full bg-indigo-500/10 dark:bg-indigo-600/10 blur-[100px] pointer-events-none transition-colors duration-500 z-0"></div>
+    </>
+  );
+
+  const renderHeader = () => (
+    <header className="relative z-20 flex items-center justify-between border-b border-slate-200/50 dark:border-white/5 bg-white/50 dark:bg-slate-950/40 px-6 py-4 backdrop-blur-md">
+      <div className="flex items-center gap-3">
+        <div className="relative flex h-8 w-8 items-center justify-center rounded-lg bg-blue-100 dark:bg-blue-500/20 border border-blue-200 dark:border-blue-500/30">
+          <FileCheck2 className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+        </div>
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500 dark:text-slate-400">LegalSetu Engine</p>
+          <h1 className="font-serif text-lg font-bold text-slate-900 dark:text-white">Document Analysis</h1>
+        </div>
+      </div>
+      <Badge className="bg-blue-100 dark:bg-blue-500/20 text-blue-700 dark:text-blue-400 border-none shadow-none font-mono text-xs hidden sm:flex items-center gap-1.5">
+        <Cpu className="h-3 w-3" /> AI_INFERENCE_ACTIVE
+      </Badge>
+    </header>
+  );
+
   if (phase === "error" || (phase !== "loading-doc" && phase !== "analyzing" && !doc)) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-white">
-        <p className="text-red-500">{errorMsg || "Document not found."}</p>
-      </div>
-    );
-  }
-
-  if (phase === "loading-doc" || !doc) {
-    return (
-      <div className="min-h-screen bg-white">
-        <header className="border-b border-sky-100 bg-white px-6 py-5">
-          <p className="text-sm text-sky-500">LegalSetu &rsaquo; Document OCR</p>
-          <h1 className="text-2xl font-bold text-slate-900">Document OCR</h1>
-        </header>
-        <main className="mx-auto max-w-3xl px-6 py-8">
-          <OcrStepper steps={buildSteps("loading-doc")} />
-          <div className="animate-pulse space-y-3">
-            <div className="h-5 w-1/3 rounded bg-sky-100" />
-            <div className="h-24 w-full rounded-xl bg-sky-50" />
+      <div className="relative min-h-[calc(100vh-4rem)] w-full overflow-hidden bg-slate-50 dark:bg-[#070B14] font-sans flex flex-col transition-colors duration-500">
+        {renderBackground()}
+        {renderHeader()}
+        <div className="flex flex-1 items-center justify-center relative z-10 px-6">
+          <div className="glass-panel flex flex-col items-center rounded-3xl p-10 text-center border-red-500/30 shadow-[0_0_40px_rgba(239,68,68,0.1)]">
+            <ShieldAlert className="h-12 w-12 text-red-500 mb-4" />
+            <h2 className="text-xl font-bold text-slate-900 dark:text-white mb-2">Analysis Interrupted</h2>
+            <p className="text-sm text-slate-500 dark:text-slate-400 mb-6">{errorMsg || "Document not found or could not be loaded."}</p>
+            <Button onClick={() => router.push("/dashboard/documents")} className="rounded-xl bg-slate-900 dark:bg-white text-white dark:text-slate-900">
+              Return to Documents
+            </Button>
           </div>
-        </main>
+        </div>
       </div>
     );
   }
 
-  const categoryKey = normalizeCategory(doc.category);
+  // Define Category Safely
+  const categoryKey = doc ? normalizeCategory(doc.category) : "legal-notice";
   const category = DOC_CATEGORIES[categoryKey];
-  const isDegraded = doc.analysisStatus === "DEGRADED";
+  const ActiveIcon = category.icon;
+  const isDegraded = doc?.analysisStatus === "DEGRADED";
 
   return (
-    <div className="min-h-screen bg-white">
-      <header className="border-b border-sky-100 bg-white px-6 py-5">
-        <p className="text-sm text-sky-500">LegalSetu &rsaquo; Document OCR</p>
-        <h1 className="text-2xl font-bold text-slate-900">Document OCR</h1>
-      </header>
+    <div className="relative min-h-[calc(100vh-4rem)] w-full overflow-hidden bg-slate-50 dark:bg-[#070B14] font-sans transition-colors duration-500">
+      
+      <style dangerouslySetInnerHTML={{ __html: `
+        .perspective-container { perspective: 1200px; transform-style: preserve-3d; }
+        
+        .glass-panel {
+          background: rgba(255, 255, 255, 0.6);
+          backdrop-filter: blur(20px);
+          border: 1px solid rgba(255, 255, 255, 0.8);
+          box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.05);
+        }
+        .dark .glass-panel {
+          background: rgba(15, 23, 42, 0.4);
+          border: 1px solid rgba(255, 255, 255, 0.1);
+          box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+        }
 
-      <main className="mx-auto max-w-3xl px-6 py-8">
-        <OcrStepper steps={buildSteps(phase)} />
+        .data-node {
+          background: rgba(255, 255, 255, 0.8);
+          border: 1px solid rgba(226, 232, 240, 1);
+          border-radius: 1.25rem;
+          transition: all 0.3s ease;
+        }
+        .dark .data-node {
+          background: rgba(30, 41, 59, 0.3);
+          border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+        .data-node:hover {
+          transform: translateY(-2px);
+          box-shadow: 0 10px 30px -10px rgba(59, 130, 246, 0.1);
+        }
 
-        <Button variant="ghost" className="mb-4 text-sky-600" onClick={() => router.push("/dashboard/documents")}>
-          ← Back
-        </Button>
+        @keyframes scan-beam {
+          0% { top: 0%; opacity: 0; }
+          20% { opacity: 1; }
+          80% { opacity: 1; }
+          100% { top: 100%; opacity: 0; }
+        }
+        .scanner-line {
+          position: absolute;
+          left: 0; right: 0; height: 2px;
+          background: linear-gradient(90deg, transparent, #3b82f6, transparent);
+          box-shadow: 0 0 15px #3b82f6;
+          animation: scan-beam 2.5s ease-in-out infinite;
+          z-index: 10;
+        }
+      `}} />
 
-        <div className="mb-6 flex items-center gap-3">
-          <span className="text-xl">{category.icon}</span>
-          <div>
-            <h2 className="font-semibold text-slate-900">{category.label}</h2>
-            <p className="text-sm text-slate-500">{doc.fileName} · {doc.fileSizeKb} KB</p>
+      {renderBackground()}
+      {renderHeader()}
+
+      <main className="relative z-10 mx-auto max-w-4xl px-4 py-8 sm:px-6 sm:py-10 perspective-container">
+        
+        {/* Navigation & Stepper */}
+        <div className="mb-8">
+          <button 
+            onClick={() => router.push("/dashboard/documents")}
+            className="mb-6 flex items-center gap-2 text-sm font-bold text-slate-500 hover:text-blue-600 dark:text-slate-400 dark:hover:text-blue-400 transition-colors"
+          >
+            <ArrowLeft className="h-4 w-4" /> Analyze another document
+          </button>
+          
+          <div className="glass-panel rounded-2xl p-4 sm:p-6 mb-8">
+             <OcrStepper steps={buildSteps(phase)} />
           </div>
         </div>
 
-        <button
-          className="mb-2 text-sm font-medium text-sky-600"
-          onClick={() => setShowExtractedText((v) => !v)}
-        >
-          {showExtractedText ? "▾" : "▸"} Extracted Text (OCR)
-        </button>
-        {showExtractedText && (
-          <Card className="mb-3 border-sky-100 bg-sky-50/50 p-4 text-sm text-slate-700 whitespace-pre-wrap">
-            {doc.ocrText}
-          </Card>
-        )}
-        <p className="mb-6 text-sm text-slate-500">{doc.ocrConfidenceNote}</p>
-
-        {doc.analysis ? (
-          <Card className="border-sky-100 p-0 overflow-hidden">
-            <div className={isDegraded ? "bg-amber-500 px-6 py-3" : "bg-sky-500 px-6 py-3"}>
-              <h3 className="font-semibold text-white">
-                {isDegraded ? "AI Summary — Not Available" : "AI Summary"}
-              </h3>
+        {/* Loading State */}
+        {(phase === "loading-doc" || !doc) ? (
+          <div className="animate-in fade-in zoom-in-95 duration-500 glass-panel relative overflow-hidden rounded-[2rem] p-12 text-center flex flex-col items-center border-blue-500/30 shadow-[0_0_50px_rgba(59,130,246,0.1)]">
+            <div className="scanner-line"></div>
+            <div className="mb-6 relative flex h-24 w-24 items-center justify-center rounded-full bg-blue-50 dark:bg-slate-800 border border-blue-100 dark:border-slate-700">
+              <div className="absolute inset-0 rounded-full border-2 border-blue-400 border-t-transparent animate-spin"></div>
+              <Cpu className="h-10 w-10 text-blue-500 animate-pulse" />
             </div>
-            <div className="space-y-5 px-6 py-6">
-              {isDegraded && (
-                <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-800">
-                  The AI couldn't analyze this document last time. You can try again below — this
-                  won't re-run automatically on future visits, to save on AI usage.
-                </p>
-              )}
-
-              <Field label="Case Name" value={doc.analysis.caseName} />
-              <Field label="Judge" value={doc.analysis.judge} />
-              <Field label="Date" value={doc.analysis.date} />
-              <Field label="Decision Summary" value={doc.analysis.decisionSummary} />
-              <Field label="Key Findings" items={doc.analysis.keyFindings} />
-              <Field label="Next Steps" items={doc.analysis.nextSteps} />
-
-              <Disclaimer />
-
-              <div className="flex flex-wrap gap-3">
-                {isDegraded && (
-                  <Button
-                    className="bg-sky-500 text-white hover:bg-sky-600"
-                    onClick={handleReanalyze}
-                    disabled={isReanalyzing || quotaCooldown > 0}
-                  >
-                    {isReanalyzing
-                      ? "Re-analyzing…"
-                      : quotaCooldown > 0
-                        ? `Try again in ${quotaCooldown}s`
-                        : "Re-analyze"}
-                  </Button>
-                )}
-                <Button
-                  variant="outline"
-                  className="border-sky-300 text-sky-700"
-                  onClick={() => router.push("/dashboard/documents")}
-                >
-                  Analyze Another {category.label}
-                </Button>
-              </div>
-
-              {errorMsg && <p className="text-sm text-red-500">{errorMsg}</p>}
-            </div>
-          </Card>
+            <h2 className="text-xl font-bold text-slate-900 dark:text-white mb-2">Synthesizing Document</h2>
+            <p className="text-sm font-mono text-slate-500 dark:text-slate-400">Extracting legal entities and parameters...</p>
+          </div>
         ) : (
-          <Card className="border-sky-100 bg-sky-50/40 p-6 text-center">
-            <div className="mx-auto mb-3 h-8 w-8 animate-spin rounded-full border-2 border-sky-200 border-t-sky-500" />
-            <p className="font-medium text-sky-700">Generating AI summary…</p>
-            <p className="mt-1 text-sm text-slate-500">This usually takes a few seconds.</p>
-          </Card>
+          
+          /* Render Active Document */
+          <div className="animate-in fade-in slide-in-from-bottom-8 duration-700">
+            
+            {/* Meta Header */}
+            <div className="mb-8 flex items-center gap-4">
+              <div className={`flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br ${category.color} text-white shadow-lg`}>
+                <ActiveIcon className="h-7 w-7" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <h2 className="text-2xl font-bold text-slate-900 dark:text-white truncate">{category.label}</h2>
+                <div className="flex items-center gap-2 mt-1">
+                  <Badge variant="outline" className="border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 font-mono text-[10px] uppercase">
+                    {(doc.fileSizeKb).toFixed(0)} KB
+                  </Badge>
+                  <span className="text-sm text-slate-500 dark:text-slate-400 truncate">{doc.fileName}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Extracted OCR Text Toggle */}
+            <div className="mb-8">
+              <button
+                className="group flex items-center gap-2 text-sm font-bold text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 transition-colors"
+                onClick={() => setShowExtractedText((v) => !v)}
+              >
+                <div className="flex h-6 w-6 items-center justify-center rounded-full bg-blue-100 dark:bg-blue-500/20 group-hover:bg-blue-200 dark:group-hover:bg-blue-500/30 transition-colors">
+                  {showExtractedText ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                </div>
+                View Raw Extracted Text (OCR)
+              </button>
+              
+              <div className={`mt-3 overflow-hidden transition-all duration-500 ease-in-out ${showExtractedText ? 'max-h-[1000px] opacity-100' : 'max-h-0 opacity-0'}`}>
+                <div className="glass-panel rounded-2xl p-5 border-blue-200 dark:border-blue-500/20">
+                  <div className="mb-3 flex items-center justify-between">
+                    <span className="text-[10px] font-mono font-bold uppercase tracking-widest text-slate-400">Raw Device Extraction</span>
+                    <span className="text-[10px] font-mono text-emerald-600 dark:text-emerald-400">{doc.ocrConfidenceNote}</span>
+                  </div>
+                  <div className="max-h-64 overflow-y-auto pr-2 text-xs font-mono leading-relaxed text-slate-600 dark:text-slate-300 whitespace-pre-wrap scrollbar-thin scrollbar-thumb-slate-300 dark:scrollbar-thumb-slate-600">
+                    {doc.ocrText}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* AI Summary Section */}
+            {doc.analysis ? (
+              <div className={`glass-panel relative overflow-hidden rounded-[2rem] border-t-4 ${isDegraded ? 'border-t-amber-500 shadow-[0_0_40px_rgba(245,158,11,0.1)]' : 'border-t-blue-500 shadow-[0_0_40px_rgba(59,130,246,0.1)]'}`}>
+                
+                {/* Header Banner */}
+                <div className={`px-8 py-5 border-b flex items-center justify-between ${isDegraded ? 'bg-amber-50 dark:bg-amber-500/10 border-amber-200 dark:border-amber-500/20' : 'bg-blue-50 dark:bg-blue-500/10 border-blue-200 dark:border-blue-500/20'}`}>
+                  <div className="flex items-center gap-2">
+                    {isDegraded ? <AlertTriangle className="h-5 w-5 text-amber-600 dark:text-amber-400" /> : <Sparkles className="h-5 w-5 text-blue-600 dark:text-blue-400" />}
+                    <h3 className={`font-serif text-lg font-bold ${isDegraded ? 'text-amber-900 dark:text-amber-300' : 'text-blue-900 dark:text-blue-300'}`}>
+                      {isDegraded ? "AI Intelligence (Partial/Degraded)" : "AI Intelligence Report"}
+                    </h3>
+                  </div>
+                </div>
+
+                <div className="p-6 sm:p-8 space-y-6">
+                  {isDegraded && (
+                    <div className="rounded-xl bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/20 p-4 flex items-start gap-3">
+                      <AlertTriangle className="h-5 w-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                      <p className="text-sm text-amber-800 dark:text-amber-200 leading-relaxed">
+                        The AI engine could not fully process this document's complex layout during the last pass. Review the extracted fields carefully. You can request a manual re-analysis below.
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Data Nodes Grid */}
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <Field label="Subject / Case Name" value={doc.analysis.caseName} />
+                    <Field label="Authority / Judge" value={doc.analysis.judge} />
+                    <Field label="Filing / Order Date" value={doc.analysis.date} />
+                    <Field label="Executive Summary" value={doc.analysis.decisionSummary} className="sm:col-span-2" />
+                  </div>
+
+                  <div className="grid gap-6 sm:grid-cols-2 pt-4">
+                    <Field label="Key Findings & Obligations" items={doc.analysis.keyFindings} icon={ListChecks} />
+                    <Field label="Recommended Next Steps" items={doc.analysis.nextSteps} icon={CheckCircle2} />
+                  </div>
+
+                  <div className="pt-6 mt-6 border-t border-slate-200 dark:border-white/10">
+                    <Disclaimer />
+                  </div>
+
+                  {/* Action Bar */}
+                  <div className="flex flex-wrap items-center gap-4 pt-4">
+                    {isDegraded && (
+                      <Button
+                        className="rounded-xl bg-amber-500 text-white hover:bg-amber-600 shadow-lg shadow-amber-500/20"
+                        onClick={handleReanalyze}
+                        disabled={isReanalyzing || quotaCooldown > 0}
+                      >
+                        <RefreshCw className={`mr-2 h-4 w-4 ${isReanalyzing ? 'animate-spin' : ''}`} />
+                        {isReanalyzing
+                          ? "Re-analyzing Neural Core…"
+                          : quotaCooldown > 0
+                            ? `Cooldown: ${quotaCooldown}s`
+                            : "Force Re-analyze"}
+                      </Button>
+                    )}
+                    
+                    {errorMsg && <p className="text-sm font-bold text-red-500 animate-pulse">{errorMsg}</p>}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="glass-panel flex flex-col items-center justify-center rounded-[2rem] p-12 text-center h-[400px]">
+                <div className="relative mb-6 h-16 w-16">
+                  <div className="absolute inset-0 rounded-full border-2 border-slate-200 dark:border-slate-700"></div>
+                  <div className="absolute inset-0 rounded-full border-2 border-blue-500 border-t-transparent animate-spin"></div>
+                </div>
+                <p className="font-bold text-slate-900 dark:text-white text-lg">Synthesizing Neural Summary</p>
+                <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">Parsing complex legalese into plain language...</p>
+              </div>
+            )}
+          </div>
         )}
       </main>
     </div>
   );
 }
 
-function Field({ label, value, items }: { label: string; value?: string; items?: string[] }) {
+// --- HOLOGRAPHIC FIELD COMPONENT ---
+function Field({ label, value, items, className = "", icon: Icon }: { label: string; value?: string; items?: string[]; className?: string; icon?: any }) {
   return (
-    <div>
-      <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-sky-600">{label}</p>
-      {value !== undefined && <p className="text-sm text-slate-800">{value}</p>}
+    <div className={`data-node p-5 ${className}`}>
+      <div className="mb-2 flex items-center gap-2 text-[11px] font-bold uppercase tracking-widest text-slate-500 dark:text-slate-400">
+        {Icon && <Icon className="h-3.5 w-3.5 text-blue-500" />}
+        {label}
+      </div>
+      
+      {value !== undefined && (
+        <p className="text-sm font-medium text-slate-800 dark:text-slate-200 leading-relaxed">
+          {value || <span className="text-slate-400 italic">Not detected in document</span>}
+        </p>
+      )}
+      
       {items !== undefined && (
-        <ul className="list-disc space-y-1 pl-5 text-sm text-slate-800">
-          {items.map((item, i) => (
-            <li key={i}>{item}</li>
-          ))}
-        </ul>
+        items.length > 0 ? (
+          <ul className="space-y-2 text-sm text-slate-800 dark:text-slate-200">
+            {items.map((item, i) => (
+              <li key={i} className="flex items-start gap-2">
+                <div className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-blue-500 shadow-[0_0_5px_rgba(59,130,246,0.8)]"></div>
+                <span className="leading-relaxed">{item}</span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+           <p className="text-sm text-slate-400 italic">No specific items detected.</p>
+        )
       )}
     </div>
   );

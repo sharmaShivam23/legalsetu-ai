@@ -1,3 +1,4 @@
+// app/register/page.tsx
 "use client";
 
 import { useState } from "react";
@@ -64,7 +65,11 @@ export default function RegisterPage() {
   }
 
   return (
-    <main className="flex min-h-screen bg-slate-50 font-sans selection:bg-indigo-500 selection:text-white">
+    <main className="relative flex min-h-screen bg-slate-50 dark:bg-[#0B1120] font-sans selection:bg-indigo-500 selection:text-white transition-colors duration-200">
+      
+      {/* Background Grid */}
+      <div className="absolute inset-0 z-0 pointer-events-none bg-[linear-gradient(to_right,rgba(0,0,0,0.05)_1px,transparent_1px),linear-gradient(to_bottom,rgba(0,0,0,0.05)_1px,transparent_1px)] dark:bg-[linear-gradient(to_right,rgba(255,255,255,0.03)_1px,transparent_1px),linear-gradient(to_bottom,rgba(255,255,255,0.03)_1px,transparent_1px)] bg-[size:40px_40px] [mask-image:radial-gradient(ellipse_60%_60%_at_50%_50%,#000_50%,transparent_100%)]"></div>
+
       <style dangerouslySetInnerHTML={{ __html: `
         /* 3D Extrusion CSS */
         .scene-3d { perspective: 1000px; transform-style: preserve-3d; }
@@ -97,9 +102,9 @@ export default function RegisterPage() {
       `}} />
 
       {/* Right Panel: 3D Visualizer (Hidden on mobile) */}
-      <div className="relative hidden w-1/2 flex-col items-center justify-center overflow-hidden border-l border-slate-200/80 bg-white lg:flex order-last">
-        <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-[0.02]"></div>
-        <div className="absolute bottom-1/4 right-1/4 h-[500px] w-[500px] rounded-full bg-emerald-500/10 blur-[120px]"></div>
+      <div className="relative z-10 hidden w-1/2 flex-col items-center justify-center overflow-hidden border-l border-slate-200/80 dark:border-slate-800 bg-white/50 dark:bg-slate-950/50 backdrop-blur-sm lg:flex order-last">
+        <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-[0.02] dark:opacity-[0.03]"></div>
+        <div className="absolute bottom-1/4 right-1/4 h-[500px] w-[500px] rounded-full bg-emerald-500/10 dark:bg-emerald-600/10 blur-[120px]"></div>
 
         <div className="scene-3d z-10 flex flex-col items-center">
           {/* Extruded Logo */}
@@ -114,23 +119,23 @@ export default function RegisterPage() {
                   filter: i === 0 ? "drop-shadow(0 10px 25px rgba(16,185,129,0.25))" : "none",
                 }}
               >
-                <Scale className={`h-32 w-32 ${i === 0 ? "text-emerald-600" : "text-emerald-200"}`} strokeWidth={1.5} />
+                <Scale className={`h-32 w-32 ${i === 0 ? "text-emerald-600 dark:text-white" : "text-emerald-200 dark:text-emerald-600"}`} strokeWidth={1.5} />
               </div>
             ))}
           </div>
-          <h2 className="font-serif text-3xl font-bold text-slate-900 drop-shadow-xs text-center px-10">
+          <h2 className="font-serif text-3xl font-bold text-slate-900 dark:text-white drop-shadow-xs text-center px-10">
             Democratizing Legal Access
           </h2>
-          <div className="mt-8 flex items-center gap-3 rounded-full border border-emerald-200 bg-emerald-50 px-5 py-2 shadow-xs">
-            <ShieldCheck className="h-5 w-5 text-emerald-600" />
-            <span className="text-sm font-medium text-emerald-800">End-to-End Encryption Enabled</span>
+          <div className="mt-8 flex items-center gap-3 rounded-full border border-emerald-200 dark:border-emerald-500/30 bg-emerald-50 dark:bg-emerald-500/10 px-5 py-2 shadow-xs">
+            <ShieldCheck className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
+            <span className="text-sm font-medium text-emerald-800 dark:text-emerald-200">End-to-End Encryption Enabled</span>
           </div>
         </div>
       </div>
 
       {/* Left Panel: The Form */}
-      <div className="flex w-full flex-col justify-center px-6 lg:w-1/2 xl:px-24 relative">
-        <div className="absolute inset-0 block bg-slate-50 lg:hidden -z-10"></div>
+      <div className="flex w-full flex-col justify-center px-6 lg:w-1/2 xl:px-24 relative z-10 backdrop-blur-sm">
+        <div className="absolute inset-0 block bg-slate-50/50 dark:bg-[#0B1120]/50 lg:hidden -z-10"></div>
 
         <div className="mx-auto w-full max-w-md perspective-container py-12">
           <div className="mb-8 lg:hidden flex flex-col items-center">
@@ -139,47 +144,47 @@ export default function RegisterPage() {
             </div>
           </div>
 
-          <h1 className="text-3xl font-bold text-slate-900 mb-2">Create Account</h1>
-          <p className="text-slate-500 mb-10 text-sm">Join LegalSetu to understand your rights in your language.</p>
+          <h1 className="text-3xl font-bold text-slate-900 dark:text-white mb-2">Create Account</h1>
+          <p className="text-slate-500 dark:text-slate-400 mb-10 text-sm">Join LegalSetu to understand your rights in your language.</p>
 
           <form onSubmit={handleSubmit} className="space-y-5 scene-3d">
             <div className="space-y-2">
-              <label className="text-xs font-bold uppercase tracking-wider text-slate-500">Full Name</label>
-              <div className="input-float relative rounded-xl bg-white border border-slate-200 shadow-xs">
-                <User className="absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" />
+              <label className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Full Name</label>
+              <div className="input-float relative rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 shadow-xs">
+                <User className="absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400 dark:text-slate-500" />
                 <Input
                   value={form.name}
                   onChange={(e) => setForm({ ...form, name: e.target.value })}
                   placeholder="John Doe"
-                  className="h-14 w-full border-none bg-transparent pl-12 text-slate-900 placeholder:text-slate-400 focus-visible:ring-0"
+                  className="h-14 w-full border-none bg-transparent pl-12 text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-600 focus-visible:ring-0"
                 />
               </div>
             </div>
 
             <div className="space-y-2">
-              <label className="text-xs font-bold uppercase tracking-wider text-slate-500">Email Address</label>
-              <div className="input-float relative rounded-xl bg-white border border-slate-200 shadow-xs">
-                <Mail className="absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" />
+              <label className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Email Address</label>
+              <div className="input-float relative rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 shadow-xs">
+                <Mail className="absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400 dark:text-slate-500" />
                 <Input
                   type="email"
                   value={form.email}
                   onChange={(e) => setForm({ ...form, email: e.target.value })}
                   placeholder="name@example.com"
-                  className="h-14 w-full border-none bg-transparent pl-12 text-slate-900 placeholder:text-slate-400 focus-visible:ring-0"
+                  className="h-14 w-full border-none bg-transparent pl-12 text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-600 focus-visible:ring-0"
                 />
               </div>
             </div>
 
             <div className="space-y-2">
-              <label className="text-xs font-bold uppercase tracking-wider text-slate-500">Password</label>
-              <div className="input-float relative rounded-xl bg-white border border-slate-200 shadow-xs">
-                <Lock className="absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" />
+              <label className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Password</label>
+              <div className="input-float relative rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 shadow-xs">
+                <Lock className="absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400 dark:text-slate-500" />
                 <Input
                   type="password"
                   value={form.password}
                   onChange={(e) => setForm({ ...form, password: e.target.value })}
                   placeholder="At least 8 characters"
-                  className="h-14 w-full border-none bg-transparent pl-12 text-slate-900 placeholder:text-slate-400 focus-visible:ring-0"
+                  className="h-14 w-full border-none bg-transparent pl-12 text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-600 focus-visible:ring-0"
                 />
               </div>
             </div>
@@ -199,9 +204,9 @@ export default function RegisterPage() {
             </button>
           </form>
 
-          <p className="mt-10 text-center text-sm text-slate-500">
+          <p className="mt-10 text-center text-sm text-slate-500 dark:text-slate-400">
             Already have an account?{" "}
-            <Link href="/login" className="font-bold text-indigo-600 hover:text-indigo-700 transition-colors">
+            <Link href="/login" className="font-bold text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 dark:hover:text-indigo-300 transition-colors">
               Sign in securely
             </Link>
           </p>
