@@ -18,16 +18,23 @@ export async function POST(req: NextRequest) {
   if (!parsed.success) return apiError("VALIDATION_ERROR", "Invalid request.", 422);
 
   const draft = await prisma.fIRDraft.findFirst({
-    where: { id: parsed.data.firDraftId, userId }, // user isolation enforced
+    where: { id: parsed.data.firDraftId, userId },
   });
 
   if (!draft) return apiError("NOT_FOUND", "FIR draft not found.", 404);
 
-  const formData = (draft.formData as FIRWizardData | null) ?? {};
+  // FIXED: Reconstruct formData dynamically from the database columns
+  const formData: any = {
+    incidentType: draft.incidentType || undefined,
+    incidentDateTime: draft.incidentDate?.toISOString() || undefined,
+    location: draft.location || undefined,
+    peopleInvolved: draft.peopleInvolved || undefined,
+    description: draft.description || undefined,
+    evidence: draft.evidence || undefined,
+    witnesses: draft.witnesses || undefined,
+    additionalDetails: draft.additionalDetails || undefined,
+  };
 
-  // Weighted scoring per FIR_Feature_Implementation_Phases.md § Phase 2.1:
-  // Date/Time 15%, Location 15%, Accused 10%, Loss/Injury 15%,
-  // Narrative >100 words 35%, Witnesses/Evidence 10%.
   const { score: completenessScore, missingFields, breakdown } = computeCompleteness(formData);
 
   const inconsistencies: string[] = [];
