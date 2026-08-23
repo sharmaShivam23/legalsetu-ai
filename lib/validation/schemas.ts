@@ -85,27 +85,23 @@ export const createDocumentSchema = z.object({
 // ---- AI analysis result (used in app/api/documents/[id]/analyze/route.ts) ----
 
 export const analysisResultSchema = z.object({
-  documentType: z.string(),
-  partiesInvolved: z.array(z.string()),
-  keyDates: z.array(z.string()),
-  mainSubjectMatter: z.string(),
-  obligationsOrDirections: z.array(z.string()),
-  deadlinesOrTimeLimits: z.array(z.string()),
-  possibleConsequences: z.array(z.string()),
-  recommendedNextSteps: z.array(z.string()),
+  caseName: z.string(),
+  judge: z.string(),
+  date: z.string(),
+  decisionSummary: z.string(),
+  keyFindings: z.array(z.string()),
+  nextSteps: z.array(z.string()),
 });
 
 export type AnalysisResult = z.infer<typeof analysisResultSchema>;
 
 export function fallbackAnalysisResult(): AnalysisResult {
   return {
-    documentType: "Not detected",
-    partiesInvolved: ["Not detected"],
-    keyDates: ["Not detected"],
-    mainSubjectMatter: "Not detected",
-    obligationsOrDirections: ["Not detected"],
-    deadlinesOrTimeLimits: ["Not detected"],
-    possibleConsequences: ["Not detected"],
-    recommendedNextSteps: ["Not detected"],
+    caseName: "Not detected",
+    judge: "Not detected",
+    date: "Not detected",
+    decisionSummary: "Not detected",
+    keyFindings: ["Not detected"],
+    nextSteps: ["Not detected"],
   };
 }

@@ -45,7 +45,49 @@ export class MockProvider implements AIProvider {
 
   async complete(options: LLMCompletionOptions): Promise<string> {
     const query = lastUserMessage(options.messages);
+
+    // Some callers (e.g. app/api/documents/[id]/analyze/route.ts) require
+    // a strict JSON response and will JSON.parse() + zod-validate whatever
+    // we return. The generic prose demo answer below is NOT valid JSON, so
+    // those callers would fail on every single request in demo mode and
+    // silently fall back to "Not detected" everywhere. Detect that case
+    // from the prompt itself and answer with valid, clearly-labeled demo
+    // JSON instead, so demo mode actually demonstrates the real output
+    // shape instead of masking it behind a fallback.
+    if (this.wantsJsonAnalysis(options.messages)) {
+      return this.buildDemoAnalysisJson(query);
+    }
+
     return this.buildDemoAnswer(query);
+  }
+
+  private wantsJsonAnalysis(messages: ChatMessage[]): boolean {
+    const combined = messages.map((m) => m.content).join("\n");
+    return (
+      combined.includes("Return ONLY valid JSON") ||
+      combined.includes('"documentType"')
+    );
+  }
+
+  private buildDemoAnalysisJson(query: string): string {
+    // Matches analysisResultSchema in lib/validation/schemas.ts exactly.
+    // Every field is explicitly labeled as demo content per this file's
+    // header comment — never real legal analysis.
+    const analysis = {
+      caseName: "[DEMO MODE] Sample v. Case Name",
+      judge: "[DEMO MODE] Presiding officer would be extracted here.",
+      date: "[DEMO MODE] Document date would be extracted here.",
+      decisionSummary:
+        "[DEMO MODE] This is a simulated analysis. Configure AI_PROVIDER=gemini (or openai) with a valid API key to get a real, grounded analysis of the uploaded document's actual content.",
+      keyFindings: [
+        "[DEMO MODE] Key findings would be extracted here from the real document text.",
+      ],
+      nextSteps: [
+        "[DEMO MODE] Recommended next steps would be extracted here.",
+        `[DEMO MODE] Original prompt excerpt: "${query.slice(0, 120)}"`,
+      ],
+    };
+    return JSON.stringify(analysis);
   }
 
   async *streamComplete(

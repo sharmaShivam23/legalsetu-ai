@@ -43,6 +43,8 @@ export interface LegalOcrResult {
   overallConfidence: number;
   confidenceNote: string;
   usedFallback: boolean; // true if Gemini had to step in for any page
+  pageLimitApplied: boolean; // true if the source had more pages than MAX_OCR_PAGES
+  wordLimitApplied: boolean; // true if extracted text was truncated to MAX_OCR_WORDS
 }
 
 export interface OcrOptions {
@@ -56,6 +58,24 @@ const DEFAULT_FALLBACK_THRESHOLD = 45;
 const DEFAULT_FALLBACK_TIMEOUT_MS = 15_000;
 
 export const MAX_OCR_FILE_SIZE = 15 * 1024 * 1024; // 15 MB
+
+// Hard cap on total pages processed per OCR run, across all uploaded files
+// combined. This protects server/browser load (each page = one Tesseract
+// recognize() pass, and possibly one Gemini fallback network call) and
+// keeps the feature from being used to bulk-OCR entire books/manuals for
+// free. 5 pages comfortably covers a typical legal notice, FIR, or short
+// court order — LegalSetu's actual target documents.
+export const MAX_OCR_PAGES = 5;
+
+// Hard cap on extracted word count, as a second line of defense independent
+// of page count (a single page can still contain a huge wall of text at
+// high DPI/small font). 5,000 words is a generous industry-standard ceiling
+// for a "few-page legal document" use case — well beyond what 5 normal
+// pages of a legal notice/FIR/court order would ever contain — while still
+// bounding worst-case payload size sent to the AI analysis step (which
+// already independently truncates to 12,000 characters; this just stops
+// the OCR layer itself from doing unbounded work upstream of that).
+export const MAX_OCR_WORDS = 5_000;
 
 const MIN_DIM = 1200;
 const MAX_DIM = 2600;
@@ -152,13 +172,21 @@ function loadPdfJs(): Promise<any> {
   return pdfjsLoadPromise;
 }
 
-async function pdfToPageBlobs(file: File): Promise<Blob[]> {
+async function pdfToPageBlobs(
+  file: File,
+  maxPages: number
+): Promise<{ blobs: Blob[]; totalPages: number }> {
   const pdfjsLib = await loadPdfJs();
   const buf = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
   const blobs: Blob[] = [];
 
-  for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+  // Reading pdf.numPages is cheap (metadata only, no page rendering), so we
+  // can report the true page count for the truncation notice even though
+  // we stop actually rendering at maxPages.
+  const pagesToRender = Math.min(pdf.numPages, maxPages);
+
+  for (let pageNum = 1; pageNum <= pagesToRender; pageNum++) {
     const page = await pdf.getPage(pageNum);
     const viewport = page.getViewport({ scale: 2.0 });
     const canvas = document.createElement("canvas");
@@ -171,7 +199,7 @@ async function pdfToPageBlobs(file: File): Promise<Blob[]> {
     );
     blobs.push(blob);
   }
-  return blobs;
+  return { blobs, totalPages: pdf.numPages };
 }
 
 // ─── Image preprocessing (EXIF fix + resize + contrast stretch) ───────────
@@ -373,14 +401,29 @@ export async function runLegalDocumentOCR(
     }
   }
 
-  // Flatten every uploaded file into page-image blobs.
+  // Flatten every uploaded file into page-image blobs, enforcing a hard
+  // combined cap of MAX_OCR_PAGES across ALL uploaded files together (not
+  // per-file) — e.g. two 4-page PDFs still only yield 5 processed pages
+  // total, not 8. We stop rendering PDF pages the moment the budget is
+  // exhausted, and skip any further files entirely, so no wasted work
+  // happens beyond the cap.
   const pageBlobs: Blob[] = [];
+  let pageLimitApplied = false;
+  let remainingBudget = MAX_OCR_PAGES;
+
   for (const file of files) {
+    if (remainingBudget <= 0) {
+      pageLimitApplied = true;
+      break;
+    }
     if (file.type === "application/pdf") {
-      const pages = await pdfToPageBlobs(file);
-      pageBlobs.push(...pages);
+      const { blobs, totalPages } = await pdfToPageBlobs(file, remainingBudget);
+      pageBlobs.push(...blobs);
+      remainingBudget -= blobs.length;
+      if (totalPages > blobs.length) pageLimitApplied = true;
     } else {
       pageBlobs.push(file);
+      remainingBudget -= 1;
     }
   }
 
@@ -439,13 +482,37 @@ export async function runLegalDocumentOCR(
     );
   }
 
+  // Second line of defense independent of page count: cap total extracted
+  // word count even if a single page happened to contain an unusually
+  // large amount of text. Word-boundary safe (splits/joins on whitespace),
+  // so it never cuts a word in half.
+  let finalRawText = mergedRawText;
+  let wordLimitApplied = false;
+  const words = mergedRawText.split(/\s+/).filter(Boolean);
+  if (words.length > MAX_OCR_WORDS) {
+    finalRawText =
+      words.slice(0, MAX_OCR_WORDS).join(" ") +
+      `\n\n[Truncated: extracted text exceeded the ${MAX_OCR_WORDS.toLocaleString()}-word limit for OCR analysis.]`;
+    wordLimitApplied = true;
+  }
+
+  let confidenceNote = buildConfidenceNote(overallConfidence, hadAnyText, usedFallback);
+  if (pageLimitApplied) {
+    confidenceNote += ` Only the first ${MAX_OCR_PAGES} pages were processed; the source document has more pages than this feature supports.`;
+  }
+  if (wordLimitApplied) {
+    confidenceNote += ` Extracted text was truncated to ${MAX_OCR_WORDS.toLocaleString()} words.`;
+  }
+
   return {
-    rawText: mergedRawText,
+    rawText: finalRawText,
     pages,
     lines,
     detectedLangs: detectedLangs.length ? detectedLangs : ["unknown"],
     overallConfidence,
-    confidenceNote: buildConfidenceNote(overallConfidence, hadAnyText, usedFallback),
+    confidenceNote,
     usedFallback,
+    pageLimitApplied,
+    wordLimitApplied,
   };
 }

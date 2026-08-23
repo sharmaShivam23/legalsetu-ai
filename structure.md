@@ -18,6 +18,7 @@
 ./app/api/documents/[id]/route.ts
 ./app/api/fir/route.ts
 ./app/api/fir/validate/route.ts
+./app/api/fir/[id]/route.ts
 ./app/api/health/route.ts
 ./app/api/rag/search/route.ts
 ./app/api/sources/route.ts
@@ -47,8 +48,16 @@
 ./components/chat/confidence-badge.tsx
 ./components/common/disclaimer.tsx
 ./components/common/SplashScreen.tsx
+./components/common/ThemeToggle.tsx
 ./components/dashboard/sidebar.tsx
+./components/fir/completeness-meter.tsx
+./components/fir/fir-draft-preview.tsx
 ./components/fir/fir-wizard.tsx
+./components/fir/jurisdiction-notice.tsx
+./components/fir/statute-badges.tsx
+./components/fir/wizard-steps.tsx
+./components/providers/session-provider.tsx
+./components/providers/ThemeProvider.tsx
 ./components/Splash.tsx
 ./components/ui/badge.tsx
 ./components/ui/button.tsx
@@ -73,6 +82,13 @@
 ./lib/auth/auth.ts
 ./lib/auth/config.ts
 ./lib/db/prisma.ts
+./lib/fir/completeness.ts
+./lib/fir/datetime.ts
+./lib/fir/jurisdiction.ts
+./lib/fir/pdf-generator.ts
+./lib/fir/statute-mapper.ts
+./lib/fir/summarize.ts
+./lib/fir/types.ts
 ./lib/logging/logger.ts
 ./lib/ocr/ocr.ts
 ./lib/rag/chunker.ts
@@ -87,6 +103,7 @@
 ./lib/translation/translate.ts
 ./lib/utils/api-response.ts
 ./lib/utils/cn.ts
+./lib/validation/fir-wizard-schema.ts
 ./lib/validation/schemas.ts
 ./lib/voice/stt.ts
 ./next-env.d.ts
@@ -115,4 +132,5 @@
 ./tsconfig.tsbuildinfo
 ./types/css.d.ts
 ./types/index.ts
+./types/next-auth.d.ts
 ./vitest.config.ts
