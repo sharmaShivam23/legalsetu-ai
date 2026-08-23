@@ -8,7 +8,7 @@ import type { NextRequest } from "next/server";
  * data-access layer in each API route / server action — middleware
  * alone is never trusted as the only authorization boundary.
  */
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   const response = NextResponse.next();
 
   response.headers.set("X-Content-Type-Options", "nosniff");
