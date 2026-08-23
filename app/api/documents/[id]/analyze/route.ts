@@ -31,7 +31,8 @@ const CATEGORY_LABELS: Record<string, string> = {
 const SYSTEM_PROMPT =
   "You are a legal-document analysis assistant for LegalSetu, helping non-lawyers " +
   "in India understand documents. You provide legal information, not legal advice. " +
-  "Base every answer strictly on the extracted text you are given — never invent facts.";
+  "Base every answer strictly on the extracted text you are given — never invent facts. " +
+  "Return ONLY valid JSON, with no markdown formatting and no commentary.";
 
 function withTimeout<T>(promise: Promise<T>, ms: number, timeoutError: string): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -54,16 +55,22 @@ function buildUserPrompt(categoryLabel: string, ocrText: string): string {
 Respond in simple English that a non-lawyer can understand.
 If a field cannot be determined from the text, use exactly "Not detected" (or an array containing only that string for list fields).
 
+Extract exactly these fields:
+- Case Name: the name/title of the case or matter (e.g. "Nexus Data Solutions, LLC v. Visionary OCR Corp"). For documents without a formal case name (e.g. a legal notice), use the closest equivalent (sender/recipient, or subject line).
+- Judge: the presiding judge, magistrate, or issuing officer's name and title. For documents with no judge (e.g. a legal notice), use "Not applicable".
+- Date: the primary date on the document (filing date, order date, notice date).
+- Decision Summary: a concise (2-4 sentence) plain-English summary of what was decided, ordered, or communicated.
+- Key Findings: the main factual or legal findings, as a list.
+- Next Steps: what the reader should do next, or what happens next procedurally, as a list.
+
 Return ONLY valid JSON matching this exact shape, no markdown, no commentary:
 {
-  "documentType": string,
-  "partiesInvolved": string[],
-  "keyDates": string[],
-  "mainSubjectMatter": string,
-  "obligationsOrDirections": string[],
-  "deadlinesOrTimeLimits": string[],
-  "possibleConsequences": string[],
-  "recommendedNextSteps": string[]
+  "caseName": string,
+  "judge": string,
+  "date": string,
+  "decisionSummary": string,
+  "keyFindings": string[],
+  "nextSteps": string[]
 }
 
 --- EXTRACTED TEXT (OCR) ---
@@ -113,6 +120,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       "analysis_timeout"
     );
 
+    // Providers that support a native JSON response mode (see
+    // GeminiProvider.complete()) already return clean JSON with no
+    // fences. This strip is a defensive fallback for providers/models
+    // that still wrap output in ```json ... ``` despite instructions.
     const cleaned = rawText.replace(/^```json\s*|```$/g, "").trim();
     const jsonCandidate = JSON.parse(cleaned);
     const analysis = analysisResultSchema.parse(jsonCandidate);

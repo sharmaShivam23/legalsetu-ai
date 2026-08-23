@@ -74,25 +74,15 @@ export class MockProvider implements AIProvider {
     // Every field is explicitly labeled as demo content per this file's
     // header comment — never real legal analysis.
     const analysis = {
-      documentType: "[DEMO MODE] Sample Legal Document",
-      partiesInvolved: [
-        "[DEMO MODE] Party names would be extracted here from the real document text.",
-      ],
-      keyDates: [
-        "[DEMO MODE] Key dates would be extracted here from the real document text.",
-      ],
-      mainSubjectMatter:
+      caseName: "[DEMO MODE] Sample v. Case Name",
+      judge: "[DEMO MODE] Presiding officer would be extracted here.",
+      date: "[DEMO MODE] Document date would be extracted here.",
+      decisionSummary:
         "[DEMO MODE] This is a simulated analysis. Configure AI_PROVIDER=gemini (or openai) with a valid API key to get a real, grounded analysis of the uploaded document's actual content.",
-      obligationsOrDirections: [
-        "[DEMO MODE] Obligations or directions would be extracted here.",
+      keyFindings: [
+        "[DEMO MODE] Key findings would be extracted here from the real document text.",
       ],
-      deadlinesOrTimeLimits: [
-        "[DEMO MODE] Deadlines or time limits would be extracted here.",
-      ],
-      possibleConsequences: [
-        "[DEMO MODE] Possible consequences would be extracted here.",
-      ],
-      recommendedNextSteps: [
+      nextSteps: [
         "[DEMO MODE] Recommended next steps would be extracted here.",
         `[DEMO MODE] Original prompt excerpt: "${query.slice(0, 120)}"`,
       ],

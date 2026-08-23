@@ -6,14 +6,18 @@
  * interface as the mock/OpenAI providers so the rest of the
  * app is completely agnostic to which one is active.
  *
+ * Uses @google/genai (the current, actively-maintained Google Gen AI
+ * SDK). The older @google/generative-ai package is deprecated by
+ * Google in favor of this one — see
+ * https://github.com/google-gemini/deprecated-generative-ai-js
+ *
  * NOTE: Gemini does not currently expose a dedicated
  * speech-to-text endpoint the way Whisper does, so transcribe()
- * uses Gemini's multimodal audio-understanding capability
- * (gemini-1.5-flash / gemini-1.5-pro accept inline audio).
+ * uses Gemini's multimodal audio-understanding capability.
  * OCR similarly uses Gemini's vision/multimodal input.
  */
 
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { GoogleGenAI } from "@google/genai";
 import type {
   AIProvider,
   ChatMessage,
@@ -25,29 +29,39 @@ import type {
   TranslationResult,
 } from "./provider";
 
-function toGeminiHistory(messages: ChatMessage[]) {
-  // Gemini has no "system" role in chat history; system messages are
-  // merged into a single systemInstruction, and the remaining
-  // user/assistant turns are mapped to Gemini's user/model roles.
+function toGeminiContents(messages: ChatMessage[]) {
+  // Gemini has no "system" role in contents; system messages are merged
+  // into a single systemInstruction, and the remaining user/assistant
+  // turns are mapped to Gemini's user/model roles.
   const systemParts = messages
     .filter((m) => m.role === "system")
     .map((m) => m.content)
     .join("\n\n");
 
-  const turns = messages
+  const contents = messages
     .filter((m) => m.role !== "system")
     .map((m) => ({
       role: m.role === "assistant" ? "model" : "user",
       parts: [{ text: m.content }],
     }));
 
-  return { systemInstruction: systemParts || undefined, turns };
+  return { systemInstruction: systemParts || undefined, contents };
+}
+
+// Detects analysis-style prompts that explicitly ask for strict JSON output
+// (see app/api/documents/[id]/analyze/route.ts's SYSTEM_PROMPT/buildUserPrompt).
+// When true, we ask Gemini for a native JSON response instead of relying on
+// the model to follow "return only JSON" as a plain-text instruction, which
+// is a much more reliable way to get parseable output.
+function wantsJsonResponse(messages: ChatMessage[]): boolean {
+  const combined = messages.map((m) => m.content).join("\n");
+  return combined.includes("Return ONLY valid JSON");
 }
 
 export class GeminiProvider implements AIProvider {
   name = "gemini";
   isDemo = false;
-  private client: GoogleGenerativeAI;
+  private client: GoogleGenAI;
   private chatModel: string;
   private embeddingModel: string;
 
@@ -55,73 +69,67 @@ export class GeminiProvider implements AIProvider {
     if (!process.env.GEMINI_API_KEY) {
       throw new Error("GEMINI_API_KEY is not set");
     }
-    this.client = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-    this.chatModel = process.env.GEMINI_CHAT_MODEL ?? "gemini-1.5-flash";
+    this.client = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+    // gemini-2.5-flash is the current stable fast model as of this writing.
+    // Override via GEMINI_CHAT_MODEL if you want a different one (e.g. a
+    // newer preview model), without touching this file.
+    this.chatModel = process.env.GEMINI_CHAT_MODEL ?? "gemini-2.5-flash";
     this.embeddingModel = process.env.GEMINI_EMBEDDING_MODEL ?? "gemini-embedding-001";
   }
 
   async complete(options: LLMCompletionOptions): Promise<string> {
-    const { systemInstruction, turns } = toGeminiHistory(options.messages);
-    const model = this.client.getGenerativeModel({
+    const { systemInstruction, contents } = toGeminiContents(options.messages);
+    const jsonMode = wantsJsonResponse(options.messages);
+
+    const response = await this.client.models.generateContent({
       model: this.chatModel,
-      systemInstruction,
-    });
-
-    const lastTurn = turns[turns.length - 1];
-    const history = turns.slice(0, -1);
-
-    const chat = model.startChat({
-      history,
-      generationConfig: {
+      contents,
+      config: {
+        systemInstruction,
         temperature: options.temperature ?? 0.2,
         maxOutputTokens: options.maxTokens ?? 1000,
+        ...(jsonMode ? { responseMimeType: "application/json" } : {}),
       },
     });
 
-    const result = await chat.sendMessage(lastTurn?.parts[0]?.text ?? "");
-    return result.response.text();
+    return response.text ?? "";
   }
 
   async *streamComplete(
     options: LLMCompletionOptions
   ): AsyncGenerator<LLMStreamChunk> {
-    const { systemInstruction, turns } = toGeminiHistory(options.messages);
-    const model = this.client.getGenerativeModel({
+    const { systemInstruction, contents } = toGeminiContents(options.messages);
+    const jsonMode = wantsJsonResponse(options.messages);
+
+    const stream = await this.client.models.generateContentStream({
       model: this.chatModel,
-      systemInstruction,
-    });
-
-    const lastTurn = turns[turns.length - 1];
-    const history = turns.slice(0, -1);
-
-    const chat = model.startChat({
-      history,
-      generationConfig: {
+      contents,
+      config: {
+        systemInstruction,
         temperature: options.temperature ?? 0.2,
         maxOutputTokens: options.maxTokens ?? 1000,
+        ...(jsonMode ? { responseMimeType: "application/json" } : {}),
       },
     });
 
-    const result = await chat.sendMessageStream(lastTurn?.parts[0]?.text ?? "");
-
-    for await (const chunk of result.stream) {
-      const delta = chunk.text();
+    for await (const chunk of stream) {
+      const delta = chunk.text ?? "";
       if (delta) yield { delta, done: false };
     }
     yield { delta: "", done: true };
   }
 
   async embed(text: string): Promise<EmbeddingResult> {
-    const model = this.client.getGenerativeModel({ model: this.embeddingModel });
     // Match the fixed pgvector(1536) column defined in prisma/schema.prisma.
     // gemini-embedding-001 defaults to 3072 dims, so we must explicitly
     // truncate the output to 1536 or every insert/query will fail with a
     // dimension mismatch against the database column.
-    const result = await model.embedContent({
-      content: { role: "user", parts: [{ text }] },
-      outputDimensionality: 1536,
-    } as Parameters<typeof model.embedContent>[0]);
-    const embedding = result.embedding.values;
+    const response = await this.client.models.embedContent({
+      model: this.embeddingModel,
+      contents: text,
+      config: { outputDimensionality: 1536 },
+    });
+    const embedding = response.embeddings?.[0]?.values ?? [];
     return { embedding, dimensions: embedding.length };
   }
 
@@ -134,12 +142,19 @@ export class GeminiProvider implements AIProvider {
     audio: Buffer,
     mimeType: string
   ): Promise<TranscriptionResult> {
-    const model = this.client.getGenerativeModel({ model: this.chatModel });
-    const result = await model.generateContent([
-      { text: "Transcribe this audio exactly as spoken. Return only the transcription text." },
-      { inlineData: { data: audio.toString("base64"), mimeType } },
-    ]);
-    return { text: result.response.text() };
+    const response = await this.client.models.generateContent({
+      model: this.chatModel,
+      contents: [
+        {
+          role: "user",
+          parts: [
+            { text: "Transcribe this audio exactly as spoken. Return only the transcription text." },
+            { inlineData: { data: audio.toString("base64"), mimeType } },
+          ],
+        },
+      ],
+    });
+    return { text: response.text ?? "" };
   }
 
   async translate(
@@ -165,11 +180,18 @@ export class GeminiProvider implements AIProvider {
   }
 
   async ocr(image: Buffer, mimeType: string): Promise<OCRResult> {
-    const model = this.client.getGenerativeModel({ model: this.chatModel });
-    const result = await model.generateContent([
-      { text: "Extract all text from this document image exactly as written. Return only the extracted text." },
-      { inlineData: { data: image.toString("base64"), mimeType } },
-    ]);
-    return { text: result.response.text() };
+    const response = await this.client.models.generateContent({
+      model: this.chatModel,
+      contents: [
+        {
+          role: "user",
+          parts: [
+            { text: "Extract all text from this document image exactly as written. Return only the extracted text." },
+            { inlineData: { data: image.toString("base64"), mimeType } },
+          ],
+        },
+      ],
+    });
+    return { text: response.text ?? "" };
   }
 }

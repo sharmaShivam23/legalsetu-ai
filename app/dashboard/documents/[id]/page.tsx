@@ -9,14 +9,12 @@ import { Disclaimer } from "@/components/common/disclaimer";
 import { DOC_CATEGORIES, type DocCategory } from "@/app/dashboard/documents/page";
 
 interface AnalysisResult {
-  documentType: string;
-  partiesInvolved: string[];
-  keyDates: string[];
-  mainSubjectMatter: string;
-  obligationsOrDirections: string[];
-  deadlinesOrTimeLimits: string[];
-  possibleConsequences: string[];
-  recommendedNextSteps: string[];
+  caseName: string;
+  judge: string;
+  date: string;
+  decisionSummary: string;
+  keyFindings: string[];
+  nextSteps: string[];
 }
 
 interface DocumentRecord {
@@ -142,14 +140,12 @@ export default function DocumentDetailPage() {
               <h3 className="font-semibold text-white">AI Summary</h3>
             </div>
             <div className="space-y-5 px-6 py-6">
-              <Field label="Document Type" value={doc.analysis.documentType} />
-              <Field label="Parties Involved" items={doc.analysis.partiesInvolved} />
-              <Field label="Key Dates" items={doc.analysis.keyDates} />
-              <Field label="Main Subject Matter" value={doc.analysis.mainSubjectMatter} />
-              <Field label="Obligations / Directions" items={doc.analysis.obligationsOrDirections} />
-              <Field label="Deadlines / Time Limits" items={doc.analysis.deadlinesOrTimeLimits} />
-              <Field label="Possible Consequences" items={doc.analysis.possibleConsequences} />
-              <Field label="Recommended Next Steps" items={doc.analysis.recommendedNextSteps} />
+              <Field label="Case Name" value={doc.analysis.caseName} />
+              <Field label="Judge" value={doc.analysis.judge} />
+              <Field label="Date" value={doc.analysis.date} />
+              <Field label="Decision Summary" value={doc.analysis.decisionSummary} />
+              <Field label="Key Findings" items={doc.analysis.keyFindings} />
+              <Field label="Next Steps" items={doc.analysis.nextSteps} />
 
               <Disclaimer />
 

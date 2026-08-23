@@ -25,7 +25,7 @@
     "seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
-    "@google/generative-ai": "0.21.0",
+    "@google/genai": "^2.18.0",
     "@hookform/resolvers": "^5.9.1",
     "@prisma/client": "5.22.0",
     "@supabase/server": "^1.4.1",
