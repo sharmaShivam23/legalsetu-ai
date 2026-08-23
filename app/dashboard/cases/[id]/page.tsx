@@ -19,13 +19,15 @@ export default async function CaseDetailPage({
   if (!caseData) notFound();
 
   return (
-    <div className="mx-auto max-w-3xl px-6 py-12">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold text-navy-900">{caseData.title}</h1>
-        <Badge>{caseData.status}</Badge>
+    <div className="mx-auto max-w-3xl px-6 py-12 text-textPrimary">
+      <div className="flex items-center justify-between gap-4">
+        <h1 className="text-2xl font-semibold text-textPrimary">{caseData.title}</h1>
+        <Badge className="border border-borderCustom bg-card text-textPrimary shadow-sm hover:bg-card">
+          {caseData.status}
+        </Badge>
       </div>
       {caseData.summary && (
-        <p className="mt-3 text-sm text-slate-600">{caseData.summary}</p>
+        <p className="mt-3 text-sm text-textSecondary leading-relaxed">{caseData.summary}</p>
       )}
     </div>
   );

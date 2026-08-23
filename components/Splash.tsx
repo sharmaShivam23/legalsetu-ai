@@ -51,12 +51,13 @@ export default function Splash({ duration = 3500 }: Props) {
         flexDirection: "column",
         alignItems: "center",
         justifyContent: "center",
-        background: "#0B1120",
+        background: "#f8fafc", // slate-50
         opacity: phase === "fading" ? 0 : 1,
         pointerEvents: phase === "fading" ? "none" : "auto",
         transition: "opacity 0.6s ease-out",
       }}
     >
+      {/* Background Glow Effects */}
       <div style={{ position: "absolute", inset: 0, overflow: "hidden" }}>
         <div
           style={{
@@ -67,7 +68,7 @@ export default function Splash({ duration = 3500 }: Props) {
             width: 700,
             height: 500,
             borderRadius: "100%",
-            background: "rgba(99,102,241,0.15)",
+            background: "rgba(99, 102, 241, 0.08)", // subtle indigo glow
             filter: "blur(100px)",
           }}
         />
@@ -79,21 +80,28 @@ export default function Splash({ duration = 3500 }: Props) {
             width: 400,
             height: 300,
             borderRadius: "100%",
-            background: "rgba(59,130,246,0.10)",
+            background: "rgba(59, 130, 246, 0.06)", // subtle blue glow
             filter: "blur(80px)",
           }}
         />
+      </div>
 
+      {/* Animated Icon Container */}
+      <div
+        style={{
+          position: "relative",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
         <div
           style={{
             position: "absolute",
-            top: "50%",
-            left: "50%",
-            transform: "translate(-50%, -50%)",
             width: 112,
             height: 112,
             borderRadius: "50%",
-            background: "rgba(99,102,241,0.20)",
+            background: "rgba(99, 102, 241, 0.12)",
             animation: "splashPing 2s cubic-bezier(0,0,0.2,1) infinite",
           }}
         />
@@ -101,13 +109,10 @@ export default function Splash({ duration = 3500 }: Props) {
         <div
           style={{
             position: "absolute",
-            top: "50%",
-            left: "50%",
-            transform: "translate(-50%, -50%)",
             width: 80,
             height: 80,
             borderRadius: "50%",
-            background: "rgba(99,102,241,0.12)",
+            background: "rgba(99, 102, 241, 0.08)",
             animation: "splashPing 2s cubic-bezier(0,0,0.2,1) 0.4s infinite",
           }}
         />
@@ -119,28 +124,29 @@ export default function Splash({ duration = 3500 }: Props) {
             width: 80,
             height: 80,
             borderRadius: 20,
-            background: "linear-gradient(135deg, #818cf8, #4f46e5)",
-            boxShadow: "0 0 40px rgba(99,102,241,0.5)",
+            background: "linear-gradient(135deg, #6366f1, #4f46e5)",
+            boxShadow: "0 10px 25px -5px rgba(79, 70, 229, 0.3)",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
           }}
         >
-          <Scale style={{ width: 40, height: 40, color: "#fff" }} />
+          <Scale style={{ width: 40, height: 40, color: "#ffffff" }} />
         </div>
       </div>
 
+      {/* Title & Subtitle */}
       <h1
         style={{
           marginTop: 32,
           fontFamily: "serif",
           fontSize: 36,
           fontWeight: 700,
-          color: "#fff",
+          color: "#0f172a", // slate-900
           letterSpacing: "0.05em",
         }}
       >
-        Legal<span style={{ color: "#818cf8" }}>Setu</span>
+        Legal<span style={{ color: "#4f46e5" }}>Setu</span>
       </h1>
 
       <p
@@ -149,20 +155,21 @@ export default function Splash({ duration = 3500 }: Props) {
           fontSize: 12,
           fontWeight: 600,
           letterSpacing: "0.15em",
-          color: "#94a3b8",
+          color: "#64748b", // slate-500
           textTransform: "uppercase",
         }}
       >
         AI-Powered Legal Assistance
       </p>
 
+      {/* Progress Bar */}
       <div
         style={{
           marginTop: 48,
           width: 192,
-          height: 2,
+          height: 3,
           borderRadius: 999,
-          background: "rgba(255,255,255,0.1)",
+          background: "#e2e8f0", // slate-200
           overflow: "hidden",
         }}
       >
@@ -170,21 +177,21 @@ export default function Splash({ duration = 3500 }: Props) {
           style={{
             height: "100%",
             borderRadius: 999,
-            background: "linear-gradient(90deg, #818cf8, #6366f1)",
+            background: "linear-gradient(90deg, #6366f1, #4f46e5)",
             animation: `splashBar ${duration}ms linear forwards`,
           }}
         />
       </div>
 
       <style>{`
-				@keyframes splashBar {
-					from { width: 0%; }
-					to   { width: 100%; }
-				}
-				@keyframes splashPing {
-					75%, 100% { transform: scale(2); opacity: 0; }
-				}
-			`}</style>
+        @keyframes splashBar {
+          from { width: 0%; }
+          to   { width: 100%; }
+        }
+        @keyframes splashPing {
+          75%, 100% { transform: scale(2); opacity: 0; }
+        }
+      `}</style>
     </div>
   );
 }

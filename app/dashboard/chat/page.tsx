@@ -77,18 +77,18 @@ export default function ChatPage() {
   }
 
   return (
-    <div className="relative flex h-[calc(100vh-2rem)] w-full flex-col overflow-hidden bg-[#020617] font-sans selection:bg-brand-500/30 selection:text-white rounded-[2.5rem] border border-white/10 shadow-[0_0_50px_rgba(0,0,0,0.5)]">
+    <div className="relative flex h-[calc(100vh-2rem)] w-full flex-col overflow-hidden bg-canvas text-textPrimary transition-colors duration-200 font-sans rounded-[2.5rem] border border-borderCustom shadow-xl">
       
       {/* --- SPATIAL COMPUTING CSS ENGINE --- */}
       <style dangerouslySetInnerHTML={{ __html: `
         .spatial-container { perspective: 2000px; transform-style: preserve-3d; }
         
-        /* Ambient Aurora Background */
+        /* Dynamic Ambient Aurora Background */
         .aurora-bg {
           position: absolute; top: 0; left: 0; right: 0; bottom: 0;
           background: 
-            radial-gradient(circle at 15% 50%, rgba(29, 78, 216, 0.15) 0%, transparent 50%),
-            radial-gradient(circle at 85% 30%, rgba(16, 185, 129, 0.1) 0%, transparent 50%);
+            radial-gradient(circle at 15% 50%, rgba(29, 78, 216, 0.08) 0%, transparent 50%),
+            radial-gradient(circle at 85% 30%, rgba(16, 185, 129, 0.06) 0%, transparent 50%);
           filter: blur(60px);
           animation: aurora-shift 20s ease-in-out infinite alternate;
           pointer-events: none;
@@ -110,25 +110,10 @@ export default function ChatPage() {
           will-change: transform, opacity;
         }
 
-        /* Glass Pane (VisionOS Style) */
+        /* Glass Pane (Adaptive Theme) */
         .glass-pane {
-          background: rgba(15, 23, 42, 0.4);
           backdrop-filter: blur(40px);
           -webkit-backdrop-filter: blur(40px);
-          border: 1px solid rgba(255, 255, 255, 0.12);
-          border-top: 1px solid rgba(255, 255, 255, 0.25);
-          box-shadow: 
-            0 25px 50px -12px rgba(0, 0, 0, 0.5), 
-            inset 0 1px 0 rgba(255, 255, 255, 0.1);
-        }
-
-        /* 3D Input Console */
-        .input-console {
-          background: rgba(2, 6, 23, 0.7);
-          backdrop-filter: blur(30px);
-          border: 1px solid rgba(255, 255, 255, 0.08);
-          box-shadow: 0 -20px 40px -10px rgba(0,0,0,0.5), inset 0 2px 20px rgba(255,255,255,0.02);
-          transform: translateZ(50px);
         }
 
         /* Scanning Line for Loading */
@@ -157,17 +142,17 @@ export default function ChatPage() {
       <div className="aurora-bg"></div>
       
       {/* Grid Overlay */}
-      <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-[0.04] mix-blend-overlay z-0 pointer-events-none"></div>
+      <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-[0.03] mix-blend-overlay z-0 pointer-events-none"></div>
 
       {/* Top Status Bar */}
       <header className="absolute top-0 inset-x-0 z-30 flex items-center justify-between px-8 py-5 pointer-events-none">
-        <div className="flex items-center gap-3 glass-pane rounded-full px-4 py-1.5 pointer-events-auto">
-          <Layers className="h-4 w-4 text-blue-400" />
-          <span className="text-xs font-bold tracking-widest text-white uppercase">Legal Neural Engine</span>
+        <div className="flex items-center gap-3 glass-pane bg-card/80 border border-borderCustom rounded-full px-4 py-1.5 shadow-sm pointer-events-auto">
+          <Layers className="h-4 w-4 text-brandBlue" />
+          <span className="text-xs font-bold tracking-widest text-textPrimary uppercase">Legal Neural Engine</span>
         </div>
-        <div className="flex items-center gap-2 glass-pane rounded-full px-3 py-1.5 pointer-events-auto">
-          <div className="h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]"></div>
-          <span className="text-[10px] font-mono text-slate-300 uppercase">System Ready</span>
+        <div className="flex items-center gap-2 glass-pane bg-card/80 border border-borderCustom rounded-full px-3 py-1.5 shadow-sm pointer-events-auto">
+          <div className="h-2 w-2 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)]"></div>
+          <span className="text-[10px] font-mono text-textSecondary uppercase">System Ready</span>
         </div>
       </header>
 
@@ -180,16 +165,16 @@ export default function ChatPage() {
             <div className="mt-24 flex flex-col items-center justify-center">
               <div className="core-float relative flex h-40 w-40 items-center justify-center">
                 {/* 3D Rings */}
-                <div className="absolute inset-0 rounded-full border border-blue-500/20 shadow-[0_0_40px_rgba(59,130,246,0.1)] transform rotateX(60deg) rotateY(20deg)"></div>
-                <div className="absolute inset-4 rounded-full border border-indigo-400/30 shadow-[inset_0_0_20px_rgba(99,102,241,0.2)] transform rotateX(60deg) rotateY(-20deg)"></div>
-                <div className="absolute inset-0 bg-gradient-to-tr from-blue-900/40 to-transparent rounded-full backdrop-blur-md border border-white/10"></div>
+                <div className="absolute inset-0 rounded-full border border-brandBlue/20 shadow-lg transform rotateX(60deg) rotateY(20deg)"></div>
+                <div className="absolute inset-4 rounded-full border border-brandBlue/30 transform rotateX(60deg) rotateY(-20deg)"></div>
+                <div className="absolute inset-0 bg-gradient-to-tr from-brandBlue/10 to-transparent rounded-full backdrop-blur-md border border-borderCustom"></div>
                 
-                <Scale className="h-16 w-16 text-white drop-shadow-[0_0_15px_rgba(255,255,255,0.5)] relative z-10" strokeWidth={1} />
+                <Scale className="h-16 w-16 text-brandBlue drop-shadow-md relative z-10" strokeWidth={1.5} />
               </div>
-              <h2 className="mt-12 font-serif text-4xl font-light text-white tracking-wide">
+              <h2 className="mt-12 font-serif text-4xl font-light text-textPrimary tracking-wide text-center">
                 How can I guide you today?
               </h2>
-              <p className="mt-3 text-sm text-slate-400 font-mono tracking-widest uppercase">
+              <p className="mt-3 text-sm text-textSecondary font-mono tracking-widest uppercase text-center">
                 Awaiting input in 15+ Indian Languages
               </p>
             </div>
@@ -199,29 +184,28 @@ export default function ChatPage() {
           {messages.map((msg) => (
             <div key={msg.id} className={`msg-spatial flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
               {msg.role === "user" ? (
-                // User Spatial Bubble: Solid, clean, elevated
+                /* User Bubble */
                 <div className="relative max-w-[85%] sm:max-w-[70%]">
-                  <div className="absolute inset-0 bg-white rounded-3xl blur-md opacity-20 translate-y-2 translate-z-[-10px]"></div>
-                  <div className="relative rounded-3xl rounded-tr-sm bg-slate-100 px-6 py-4 text-[15px] text-slate-900 shadow-2xl font-medium leading-relaxed">
+                  <div className="relative rounded-3xl rounded-tr-sm bg-brandBlue px-6 py-4 text-[15px] text-white shadow-md font-medium leading-relaxed">
                     {msg.content}
                   </div>
                 </div>
               ) : (
-                // AI Spatial Glass Panel
+                /* AI Glass Panel */
                 <div className="relative w-full max-w-[95%] sm:max-w-[85%] perspective-wrapper">
-                  <div className="glass-pane rounded-[2rem] rounded-tl-sm p-6 sm:p-10 relative overflow-hidden transform-gpu">
+                  <div className="glass-pane bg-card border border-borderCustom rounded-[2rem] rounded-tl-sm p-6 sm:p-10 relative overflow-hidden shadow-sm">
                     
                     {/* Header Metadata */}
-                    <div className="mb-6 flex flex-wrap items-center gap-3 border-b border-white/10 pb-4">
+                    <div className="mb-6 flex flex-wrap items-center gap-3 border-b border-borderCustom pb-4">
                       <div className="flex items-center gap-1.5">
-                        <Fingerprint className="h-4 w-4 text-blue-400" />
-                        <span className="text-[11px] font-bold text-slate-300 uppercase tracking-widest">Verified Response</span>
+                        <Fingerprint className="h-4 w-4 text-brandBlue" />
+                        <span className="text-[11px] font-bold text-textSecondary uppercase tracking-widest">Verified Response</span>
                       </div>
                       
                       {msg.isDemo && (
                         <div className="flex items-center gap-1.5 rounded-md bg-amber-500/10 px-2.5 py-1 border border-amber-500/30">
-                          <AlertTriangle className="h-3 w-3 text-amber-400" />
-                          <span className="text-[10px] font-mono text-amber-400 uppercase tracking-widest">Demo Sandbox</span>
+                          <AlertTriangle className="h-3 w-3 text-amber-500" />
+                          <span className="text-[10px] font-mono text-amber-600 dark:text-amber-400 uppercase tracking-widest">Demo Sandbox</span>
                         </div>
                       )}
                       
@@ -233,7 +217,7 @@ export default function ChatPage() {
                     </div>
 
                     {/* Rich Text Markdown */}
-                    <div className="prose prose-invert prose-lg max-w-none text-slate-200 prose-headings:font-serif prose-headings:font-light prose-headings:text-white prose-a:text-blue-400 prose-a:no-underline hover:prose-a:underline prose-strong:text-white prose-strong:font-semibold leading-relaxed">
+                    <div className="prose dark:prose-invert prose-slate max-w-none text-textPrimary prose-headings:font-serif prose-headings:font-light prose-headings:text-textPrimary prose-a:text-brandBlue prose-a:no-underline hover:prose-a:underline prose-strong:text-textPrimary prose-strong:font-semibold leading-relaxed">
                       <ReactMarkdown remarkPlugins={[remarkGfm]}>
                         {msg.content}
                       </ReactMarkdown>
@@ -241,10 +225,10 @@ export default function ChatPage() {
 
                     {/* Grounded Citations Vault */}
                     {msg.citations && msg.citations.length > 0 && (
-                      <div className="mt-10 rounded-2xl bg-black/40 p-5 border border-white/5">
+                      <div className="mt-10 rounded-2xl bg-canvas p-5 border border-borderCustom">
                         <div className="mb-4 flex items-center gap-2">
-                          <Sparkles className="h-4 w-4 text-emerald-400" />
-                          <span className="text-[11px] font-bold text-emerald-400 uppercase tracking-widest">Sourced Material</span>
+                          <Sparkles className="h-4 w-4 text-emerald-500" />
+                          <span className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-widest">Sourced Material</span>
                         </div>
                         <div className="grid gap-3 sm:grid-cols-2">
                           {msg.citations.map((c: any) => (
@@ -262,11 +246,11 @@ export default function ChatPage() {
           {/* Advanced Processing State */}
           {loading && (
             <div className="msg-spatial flex justify-start w-full max-w-[85%]">
-              <div className="glass-pane scanner relative rounded-2xl rounded-tl-sm px-8 py-6 flex items-center gap-5 overflow-hidden">
-                <Loader2 className="h-6 w-6 text-blue-400 animate-spin" />
+              <div className="glass-pane bg-card border border-borderCustom scanner relative rounded-2xl rounded-tl-sm px-8 py-6 flex items-center gap-5 overflow-hidden shadow-sm">
+                <Loader2 className="h-6 w-6 text-brandBlue animate-spin" />
                 <div className="flex flex-col gap-1">
-                  <span className="text-sm font-bold text-white tracking-wide">Synthesizing Legal Context</span>
-                  <span className="text-[11px] font-mono text-slate-400 uppercase">Querying vector space database...</span>
+                  <span className="text-sm font-bold text-textPrimary tracking-wide">Synthesizing Legal Context</span>
+                  <span className="text-[11px] font-mono text-textSecondary uppercase">Querying vector space database...</span>
                 </div>
               </div>
             </div>
@@ -275,12 +259,12 @@ export default function ChatPage() {
         </div>
       </div>
 
-      {/* Floating 3D Input Dock */}
+      {/* Floating Input Dock */}
       <div className="absolute bottom-6 inset-x-0 z-40 px-4 sm:px-12 pointer-events-none spatial-container">
         <div className="mx-auto max-w-4xl pointer-events-auto">
           
-          <div className="input-console rounded-[2rem] p-2 transition-all duration-500 focus-within:shadow-[0_-20px_50px_-10px_rgba(59,130,246,0.3)] focus-within:border-blue-500/30">
-            <div className="flex items-end gap-3 rounded-[1.5rem] bg-black/50 px-5 py-4 border border-white/5">
+          <div className="bg-card/90 backdrop-blur-xl border border-borderCustom rounded-[2rem] p-2 transition-all duration-300 shadow-lg focus-within:ring-2 focus-within:ring-brandBlue/30">
+            <div className="flex items-end gap-3 rounded-[1.5rem] bg-canvas px-5 py-4 border border-borderCustom">
               
               <Textarea
                 value={input}
@@ -293,18 +277,18 @@ export default function ChatPage() {
                 }}
                 placeholder="Type your legal scenario..."
                 rows={1}
-                className="max-h-[160px] min-h-[48px] flex-1 resize-none border-0 bg-transparent py-3 text-lg text-white placeholder:text-slate-500 focus-visible:ring-0 shadow-none scrollbar-hide font-medium"
+                className="max-h-[160px] min-h-[48px] flex-1 resize-none border-0 bg-transparent py-3 text-lg text-textPrimary placeholder:text-textSecondary focus-visible:ring-0 shadow-none scrollbar-hide font-medium"
               />
               
               <div className="flex shrink-0 items-center gap-3 pb-1">
-                <div className="text-slate-400 hover:text-white transition-colors">
+                <div className="text-textSecondary hover:text-textPrimary transition-colors">
                   <MicButton onTranscript={(text) => setInput((prev) => (prev ? prev + " " + text : text))} />
                 </div>
                 
                 <Button 
                   onClick={sendMessage} 
                   disabled={loading || !input.trim()}
-                  className="h-12 w-12 rounded-2xl bg-white text-slate-900 hover:bg-blue-400 hover:text-white hover:scale-105 hover:shadow-[0_0_20px_rgba(96,165,250,0.6)] transition-all duration-300 disabled:opacity-30 disabled:hover:scale-100 disabled:hover:shadow-none"
+                  className="h-12 w-12 rounded-2xl bg-brandBlue text-white hover:bg-brandBlue/90 hover:scale-105 transition-all duration-200 disabled:opacity-30 disabled:hover:scale-100 shadow-md"
                   size="icon"
                 >
                   <Send className="h-5 w-5" />
@@ -314,9 +298,9 @@ export default function ChatPage() {
           </div>
           
           <div className="mt-4 flex justify-center">
-             <div className="scale-90 opacity-60 hover:opacity-100 transition-opacity">
-               <Disclaimer />
-             </div>
+            <div className="scale-90 opacity-70 hover:opacity-100 transition-opacity">
+              <Disclaimer />
+            </div>
           </div>
         </div>
       </div>

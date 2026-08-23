@@ -1,15 +1,16 @@
 import { NextRequest } from "next/server";
 import { auth } from "@/lib/auth/auth";
 import { apiError, apiSuccess } from "@/lib/utils/api-response";
-import { firDraftSchema } from "@/lib/validation/schemas";
+import { firWizardSaveSchema } from "@/lib/validation/fir-wizard-schema";
 import { checkRateLimit } from "@/lib/security/rate-limit";
 import { prisma } from "@/lib/db/prisma";
 import { logger } from "@/lib/logging/logger";
+import { summarizeWizardData } from "@/lib/fir/summarize";
 
 export async function POST(req: NextRequest) {
   const session = await auth();
   if (!session?.user) return apiError("UNAUTHORIZED", "Sign in required.", 401);
-  const userId = (session.user as any).id as string;
+  const userId = session.user.id;
 
   const rateLimit = await checkRateLimit(userId, "firGeneration");
   if (!rateLimit.success) {
@@ -17,26 +18,21 @@ export async function POST(req: NextRequest) {
   }
 
   const body = await req.json().catch(() => null);
-  const parsed = firDraftSchema.safeParse(body);
+  const parsed = firWizardSaveSchema.safeParse(body);
   if (!parsed.success) {
     return apiError("VALIDATION_ERROR", "Invalid FIR details.", 422);
   }
+
+  const summary = summarizeWizardData(parsed.data.formData);
 
   try {
     const draft = await prisma.fIRDraft.create({
       data: {
         userId,
+        caseId: parsed.data.caseId,
         status: "DRAFT",
-        incidentType: parsed.data.incidentType,
-        incidentDate: parsed.data.incidentDate
-          ? new Date(parsed.data.incidentDate)
-          : undefined,
-        location: parsed.data.location,
-        peopleInvolved: parsed.data.peopleInvolved,
-        description: parsed.data.description,
-        evidence: parsed.data.evidence,
-        witnesses: parsed.data.witnesses,
-        additionalDetails: parsed.data.additionalDetails,
+        formData: parsed.data.formData as any,
+        ...summary,
       },
     });
 
@@ -51,7 +47,7 @@ export async function POST(req: NextRequest) {
 export async function GET(_req: NextRequest) {
   const session = await auth();
   if (!session?.user) return apiError("UNAUTHORIZED", "Sign in required.", 401);
-  const userId = (session.user as any).id as string;
+  const userId = session.user.id;
 
   const drafts = await prisma.fIRDraft
     .findMany({ where: { userId }, orderBy: { updatedAt: "desc" } })

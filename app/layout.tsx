@@ -2,6 +2,8 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { Toaster } from "sonner";
+import { AuthSessionProvider } from "@/components/providers/session-provider";
+import { ThemeProvider } from "@/components/providers/ThemeProvider";
 
 export const metadata: Metadata = {
   title: "LegalSetu — AI-Powered Multilingual Legal Assistance",
@@ -10,11 +12,16 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <body className="font-sans">
-        {children}
-        <Toaster position="top-center" richColors />
+        <AuthSessionProvider>
+          <ThemeProvider attribute="class" defaultTheme="dark" enableSystem>
+            {children}
+            <Toaster position="top-center" richColors />
+          </ThemeProvider>
+        </AuthSessionProvider>
       </body>
     </html>
   );
+  
 }

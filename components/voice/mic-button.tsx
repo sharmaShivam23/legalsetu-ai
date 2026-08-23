@@ -63,16 +63,20 @@ export function MicButton({
       disabled={state === "processing"}
       aria-label={state === "listening" ? "Stop recording" : "Start voice input"}
       className={cn(
-        "flex h-11 w-11 items-center justify-center rounded-full transition-colors",
-        state === "idle" && "bg-slate-100 text-slate-500 hover:bg-slate-200",
-        state === "listening" && "bg-red-500 text-white",
-        state === "processing" && "bg-slate-200 text-slate-400",
-        state === "error" && "bg-red-100 text-red-500"
+        "relative flex h-10 w-10 items-center justify-center rounded-full border transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 select-none",
+        state === "idle" &&
+          "border-slate-200 bg-slate-100 text-slate-600 hover:bg-slate-200/80 hover:text-slate-900 shadow-xs",
+        state === "listening" &&
+          "border-rose-600 bg-rose-600 text-white shadow-md animate-pulse",
+        state === "processing" &&
+          "border-slate-200 bg-slate-100 text-slate-400 cursor-not-allowed",
+        state === "error" &&
+          "border-rose-200 bg-rose-50 text-rose-600"
       )}
     >
-      {state === "listening" && <Square className="h-4 w-4" />}
-      {state === "processing" && <Loader2 className="h-4 w-4 animate-spin" />}
-      {(state === "idle" || state === "error") && <Mic className="h-5 w-5" />}
+      {state === "listening" && <Square className="h-4 w-4 fill-current" />}
+      {state === "processing" && <Loader2 className="h-4 w-4 animate-spin text-blue-600" />}
+      {(state === "idle" || state === "error") && <Mic className="h-4 w-4" />}
     </button>
   );
 }

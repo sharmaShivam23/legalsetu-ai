@@ -3,20 +3,15 @@ import { auth } from "@/lib/auth/auth";
 import { apiError, apiSuccess } from "@/lib/utils/api-response";
 import { prisma } from "@/lib/db/prisma";
 import { z } from "zod";
-
-const REQUIRED_FIELDS: Array<{ key: string; label: string }> = [
-  { key: "incidentType", label: "Incident type" },
-  { key: "incidentDate", label: "Date/time of incident" },
-  { key: "location", label: "Location" },
-  { key: "description", label: "Description of what happened" },
-];
+import { computeCompleteness } from "@/lib/fir/completeness";
+import type { FIRWizardData } from "@/lib/fir/types";
 
 const schema = z.object({ firDraftId: z.string().uuid() });
 
 export async function POST(req: NextRequest) {
   const session = await auth();
   if (!session?.user) return apiError("UNAUTHORIZED", "Sign in required.", 401);
-  const userId = (session.user as any).id as string;
+  const userId = session.user.id;
 
   const body = await req.json().catch(() => null);
   const parsed = schema.safeParse(body);
@@ -28,22 +23,24 @@ export async function POST(req: NextRequest) {
 
   if (!draft) return apiError("NOT_FOUND", "FIR draft not found.", 404);
 
-  const missingFields = REQUIRED_FIELDS.filter(
-    (f) => !(draft as any)[f.key]
-  ).map((f) => f.label);
+  const formData = (draft.formData as FIRWizardData | null) ?? {};
+
+  // Weighted scoring per FIR_Feature_Implementation_Phases.md § Phase 2.1:
+  // Date/Time 15%, Location 15%, Accused 10%, Loss/Injury 15%,
+  // Narrative >100 words 35%, Witnesses/Evidence 10%.
+  const { score: completenessScore, missingFields, breakdown } = computeCompleteness(formData);
 
   const inconsistencies: string[] = [];
-  if (
-    draft.incidentDate &&
-    draft.incidentDate.getTime() > Date.now()
-  ) {
+  if (formData.incidentDateTime && new Date(formData.incidentDateTime).getTime() > Date.now()) {
     inconsistencies.push("Incident date is in the future.");
   }
-
-  const totalFields = REQUIRED_FIELDS.length;
-  const completenessScore = Math.round(
-    ((totalFields - missingFields.length) / totalFields) * 100
-  );
+  if (
+    formData.discoveryDateTime &&
+    formData.incidentDateTime &&
+    new Date(formData.discoveryDateTime).getTime() < new Date(formData.incidentDateTime).getTime()
+  ) {
+    inconsistencies.push("Discovery date is earlier than the incident date.");
+  }
 
   const validation = await prisma.fIRValidation.upsert({
     where: { firDraftId: draft.id },
@@ -56,5 +53,9 @@ export async function POST(req: NextRequest) {
     },
   });
 
-  return apiSuccess({ validation, label: "Draft / Assistance Document" });
+  return apiSuccess({
+    validation,
+    breakdown,
+    label: "Draft / Assistance Document",
+  });
 }

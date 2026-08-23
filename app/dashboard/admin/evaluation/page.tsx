@@ -1,11 +1,6 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 
-// NOTE: All figures on this page are DEMO DATA for illustrating the
-// evaluation architecture, clearly labeled as such. Real metrics
-// must be computed by the scripts referenced in README.md against
-// an actual test set before being reported anywhere (e.g. a thesis
-// or paper) as real results.
 const METRICS = [
   { label: "Retrieval Precision", value: "0.78 (DEMO)" },
   { label: "Retrieval Recall", value: "0.71 (DEMO)" },
@@ -21,23 +16,23 @@ const METRICS = [
 
 export default function EvaluationDashboard() {
   return (
-    <div className="mx-auto max-w-3xl px-6 py-12">
+    <div className="mx-auto max-w-3xl px-6 py-12 text-textPrimary">
       <div className="flex items-center gap-3">
-        <h1 className="text-2xl font-semibold text-navy-900">Evaluation Dashboard</h1>
+        <h1 className="text-2xl font-semibold text-textPrimary">Evaluation Dashboard</h1>
         <Badge variant="warning">DEMO DATA</Badge>
       </div>
-      <p className="mt-1 text-sm text-slate-500">
+      <p className="mt-1 text-sm text-textSecondary">
         Sample metrics illustrating the evaluation architecture. Replace with
         real measurements from your test set before citing anywhere.
       </p>
       <div className="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-2">
         {METRICS.map((m) => (
-          <Card key={m.label}>
-            <CardHeader>
-              <CardTitle className="text-sm text-slate-500">{m.label}</CardTitle>
+          <Card key={m.label} className="bg-card border-borderCustom shadow-sm">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-textSecondary">{m.label}</CardTitle>
             </CardHeader>
             <CardContent>
-              <p className="text-xl font-semibold text-navy-900">{m.value}</p>
+              <p className="text-xl font-semibold text-textPrimary">{m.value}</p>
             </CardContent>
           </Card>
         ))}
