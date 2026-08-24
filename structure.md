@@ -50,6 +50,7 @@
 ./components/common/SplashScreen.tsx
 ./components/common/ThemeToggle.tsx
 ./components/dashboard/sidebar.tsx
+./components/documents/ocr-stepper.tsx
 ./components/fir/completeness-meter.tsx
 ./components/fir/fir-draft-preview.tsx
 ./components/fir/fir-wizard.tsx
