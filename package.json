@@ -25,6 +25,8 @@
     "seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
+    "@ai-sdk/google": "^4.0.50",
+    "@ai-sdk/xai": "^4.0.43",
     "@google/genai": "^2.18.0",
     "@hookform/resolvers": "^5.9.1",
     "@prisma/client": "5.22.0",

@@ -37,6 +37,10 @@ services:
       AUTH_SECRET: ${AUTH_SECRET:-dev-secret-change-me}
       AI_PROVIDER: ${AI_PROVIDER:-mock}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GEMINI_API_KEY_1: ${GEMINI_API_KEY_1:-}
+      GEMINI_API_KEY_2: ${GEMINI_API_KEY_2:-}
+      GEMINI_API_KEY_3: ${GEMINI_API_KEY_3:-}
+      GROK_API_KEY: ${GROK_API_KEY:-}
     depends_on:
       db:
         condition: service_healthy
