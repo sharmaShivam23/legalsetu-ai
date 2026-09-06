@@ -1,3 +1,5 @@
+// lib/rag/retriever.ts
+
 import { prisma } from "@/lib/db/prisma";
 import { embedText, cosineSimilarity } from "@/lib/ai/embeddings";
 import type { RAGSearchFilters, RAGSearchResult, RetrievedChunk, EvidenceLevel } from "./types";
@@ -18,8 +20,11 @@ const MIN_SIMILARITY = 0.15;
  *
  * That raw-SQL version is provided in `vectorSearchSQL()` below.
  * The JS fallback (`vectorSearchInMemory`) is used automatically
- * when running in demo mode / without a live pgvector database,
- * so local development never breaks.
+ * when the SQL query fails (e.g. no pgvector extension configured
+ * yet), so local development never hard-breaks. NOTE: because
+ * Prisma Client cannot select `Unsupported("vector")` columns
+ * through its normal query API, the fallback also fetches
+ * embeddings via raw SQL rather than `prisma.legalSource.findMany`.
  */
 export async function retrieveRelevantChunks(
   query: string,
@@ -32,7 +37,9 @@ export async function retrieveRelevantChunks(
   try {
     chunks = await vectorSearchSQL(queryEmbedding, filters);
   } catch (err) {
-    // Falls back gracefully (e.g. no DB configured yet in demo mode)
+    // Log the real reason the primary SQL path failed — silently
+    // swallowing this made past failures impossible to diagnose.
+    console.error("[retriever] vectorSearchSQL failed, falling back to in-memory search:", err);
     chunks = await vectorSearchInMemory(queryEmbedding, filters);
   }
 
@@ -77,52 +84,72 @@ async function vectorSearchSQL(
 }
 
 /**
- * Pure-JS fallback vector search (used in demo mode / when
- * pgvector queries are unavailable). Pulls chunks and computes
- * cosine similarity in memory. Fine for small demo datasets;
- * NOT intended for production scale.
+ * Pure-JS fallback vector search (used only when the primary
+ * pgvector SQL query above throws). Fetches chunk text AND
+ * embeddings via raw SQL — a normal `prisma.legalSource.findMany`
+ * query cannot be used here because `embedding` is declared as
+ * `Unsupported("vector")` in schema.prisma, which Prisma Client
+ * silently omits from any non-raw query. Computes cosine
+ * similarity in memory. Fine for small demo datasets; NOT
+ * intended for production scale.
  */
 async function vectorSearchInMemory(
   queryEmbedding: number[],
   filters: RAGSearchFilters
 ): Promise<RetrievedChunk[]> {
-  const sources = await prisma.legalSource
-    .findMany({
-      where: {
-        verificationStatus: "VERIFIED",
-        ...(filters.jurisdiction ? { jurisdiction: filters.jurisdiction } : {}),
-        ...(filters.language ? { language: filters.language } : {}),
-      },
-      include: { chunks: true },
-    })
-    .catch(() => [] as any[]);
+  const rows = await (prisma.$queryRawUnsafe as (query: string, ...values: unknown[]) => Promise<any[]>)(
+    `
+    SELECT
+      c.id as "chunkId",
+      c."sourceId" as "sourceId",
+      s.title as "sourceTitle",
+      s."actName" as "actName",
+      c.section as "section",
+      s.jurisdiction as "jurisdiction",
+      s."officialUrl" as "officialUrl",
+      s."verificationStatus" as "verificationStatus",
+      c.text as "text",
+      c.embedding::text as "embeddingText"
+    FROM "LegalSourceChunk" c
+    JOIN "LegalSource" s ON s.id = c."sourceId"
+    WHERE s."verificationStatus" = 'VERIFIED'
+      ${filters.jurisdiction ? `AND s.jurisdiction = '${filters.jurisdiction}'` : ""}
+      ${filters.language ? `AND s.language = '${filters.language}'` : ""}
+      AND c.embedding IS NOT NULL
+    `
+  ).catch((err) => {
+    console.error("[retriever] vectorSearchInMemory raw fetch also failed:", err);
+    return [] as any[];
+  });
 
   const scored: RetrievedChunk[] = [];
 
-  for (const source of sources) {
-    for (const chunk of source.chunks) {
-      if (!chunk.embedding) continue;
-      const embedding = Array.isArray(chunk.embedding)
-        ? (chunk.embedding as unknown as number[])
-        : [];
-      if (embedding.length === 0) continue;
+  for (const row of rows) {
+    if (!row.embeddingText) continue;
 
-      const similarity = cosineSimilarity(queryEmbedding, embedding);
-      if (similarity < MIN_SIMILARITY) continue;
+    // pgvector's ::text cast returns "[0.1,0.2,...]" — parse it back into a number[].
+    const embedding = row.embeddingText
+      .replace(/^\[|\]$/g, "")
+      .split(",")
+      .map(Number);
 
-      scored.push({
-        chunkId: chunk.id,
-        sourceId: source.id,
-        sourceTitle: source.title,
-        actName: source.actName,
-        section: chunk.section,
-        jurisdiction: source.jurisdiction,
-        officialUrl: source.officialUrl,
-        verificationStatus: source.verificationStatus,
-        text: chunk.text,
-        similarity,
-      });
-    }
+    if (embedding.length === 0 || embedding.some(Number.isNaN)) continue;
+
+    const similarity = cosineSimilarity(queryEmbedding, embedding);
+    if (similarity < MIN_SIMILARITY) continue;
+
+    scored.push({
+      chunkId: row.chunkId,
+      sourceId: row.sourceId,
+      sourceTitle: row.sourceTitle,
+      actName: row.actName,
+      section: row.section,
+      jurisdiction: row.jurisdiction,
+      officialUrl: row.officialUrl,
+      verificationStatus: row.verificationStatus,
+      text: row.text,
+      similarity,
+    });
   }
 
   return scored.sort((a, b) => b.similarity - a.similarity).slice(0, TOP_K);

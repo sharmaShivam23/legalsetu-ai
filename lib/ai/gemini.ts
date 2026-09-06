@@ -1,21 +1,4 @@
-/**
- * Google Gemini Provider Adapter
- * ------------------------------------------------------------
- * Real integration used when AI_PROVIDER=gemini and
- * GEMINI_API_KEY is set. Implements the same AIProvider
- * interface as the mock/OpenAI providers so the rest of the
- * app is completely agnostic to which one is active.
- *
- * Uses @google/genai (the current, actively-maintained Google Gen AI
- * SDK). The older @google/generative-ai package is deprecated by
- * Google in favor of this one — see
- * https://github.com/google-gemini/deprecated-generative-ai-js
- *
- * NOTE: Gemini does not currently expose a dedicated
- * speech-to-text endpoint the way Whisper does, so transcribe()
- * uses Gemini's multimodal audio-understanding capability.
- * OCR similarly uses Gemini's vision/multimodal input.
- */
+// lib/ai/gemini.ts
 
 import { GoogleGenAI } from "@google/genai";
 import type {
@@ -30,9 +13,6 @@ import type {
 } from "./provider";
 
 function toGeminiContents(messages: ChatMessage[]) {
-  // Gemini has no "system" role in contents; system messages are merged
-  // into a single systemInstruction, and the remaining user/assistant
-  // turns are mapped to Gemini's user/model roles.
   const systemParts = messages
     .filter((m) => m.role === "system")
     .map((m) => m.content)
@@ -45,116 +25,524 @@ function toGeminiContents(messages: ChatMessage[]) {
       parts: [{ text: m.content }],
     }));
 
-  return { systemInstruction: systemParts || undefined, contents };
+  return {
+    systemInstruction: systemParts || undefined,
+    contents,
+  };
 }
 
-// Detects analysis-style prompts that explicitly ask for strict JSON output
-// (see app/api/documents/[id]/analyze/route.ts's SYSTEM_PROMPT/buildUserPrompt).
-// When true, we ask Gemini for a native JSON response instead of relying on
-// the model to follow "return only JSON" as a plain-text instruction, which
-// is a much more reliable way to get parseable output.
+function getGeminiApiKeys(): string[] {
+  const keys = [
+    process.env.GEMINI_API_KEY_1,
+    process.env.GEMINI_API_KEY_2,
+    process.env.GEMINI_API_KEY_3,
+    process.env.GEMINI_API_KEY,
+  ].filter((key): key is string => Boolean(key?.trim()));
+
+  return [...new Set(keys)];
+}
+
+function getGrokApiKey(): string | undefined {
+  const key = process.env.GROK_API_KEY?.trim();
+  return key || undefined;
+}
+
+function getGrokModel(): string {
+  return process.env.GROK_MODEL ?? "grok-4.6";
+}
+
+function getGeminiChatModel(): string {
+  return process.env.GEMINI_CHAT_MODEL ?? "gemini-2.5-flash";
+}
+
+function getGeminiEmbeddingModel(): string {
+  return process.env.GEMINI_EMBEDDING_MODEL ?? "gemini-embedding-001";
+}
+
 function wantsJsonResponse(messages: ChatMessage[]): boolean {
-  const combined = messages.map((m) => m.content).join("\n");
-  return combined.includes("Return ONLY valid JSON");
+  return messages
+    .map((message) => message.content)
+    .join("\n")
+    .includes("Return ONLY valid JSON");
+}
+
+function toXaiMessages(messages: ChatMessage[]) {
+  return messages.map((message) => ({
+    role: message.role,
+    content: message.content,
+  }));
+}
+
+async function getXaiError(response: Response): Promise<string> {
+  try {
+    const body = await response.text();
+
+    if (body) {
+      try {
+        const parsed = JSON.parse(body) as {
+          error?: {
+            message?: string;
+          };
+          message?: string;
+        };
+
+        return (
+          parsed.error?.message ??
+          parsed.message ??
+          body
+        );
+      } catch {
+        return body;
+      }
+    }
+  } catch {
+    return "Unable to read xAI error response.";
+  }
+
+  return `xAI request failed with status ${response.status}.`;
+}
+
+async function generateWithGrok(
+  messages: ChatMessage[],
+  temperature: number,
+  maxTokens: number
+): Promise<string> {
+  const apiKey = getGrokApiKey();
+
+  if (!apiKey) {
+    throw new Error("GROK_API_KEY is not configured.");
+  }
+
+  const response = await fetch("https://api.x.ai/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: getGrokModel(),
+      messages: toXaiMessages(messages),
+      temperature,
+      max_tokens: maxTokens,
+      stream: false,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(await getXaiError(response));
+  }
+
+  const data = (await response.json()) as {
+    choices?: Array<{
+      message?: {
+        content?: string;
+      };
+    }>;
+  };
+
+  return data.choices?.[0]?.message?.content ?? "";
+}
+
+async function* streamWithGrok(
+  messages: ChatMessage[],
+  temperature: number,
+  maxTokens: number
+): AsyncGenerator<string> {
+  const apiKey = getGrokApiKey();
+
+  if (!apiKey) {
+    throw new Error("GROK_API_KEY is not configured.");
+  }
+
+  const response = await fetch("https://api.x.ai/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: getGrokModel(),
+      messages: toXaiMessages(messages),
+      temperature,
+      max_tokens: maxTokens,
+      stream: true,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(await getXaiError(response));
+  }
+
+  if (!response.body) {
+    throw new Error("xAI returned an empty streaming response.");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+
+      if (done) {
+        break;
+      }
+
+      buffer += decoder.decode(value, { stream: true });
+
+      const events = buffer.split("\n\n");
+      buffer = events.pop() ?? "";
+
+      for (const event of events) {
+        const lines = event.split("\n");
+
+        for (const line of lines) {
+          if (!line.startsWith("data:")) {
+            continue;
+          }
+
+          const payload = line.slice(5).trim();
+
+          if (!payload || payload === "[DONE]") {
+            continue;
+          }
+
+          try {
+            const parsed = JSON.parse(payload) as {
+              choices?: Array<{
+                delta?: {
+                  content?: string;
+                };
+              }>;
+            };
+
+            const delta =
+              parsed.choices?.[0]?.delta?.content ?? "";
+
+            if (delta) {
+              yield delta;
+            }
+          } catch {
+            continue;
+          }
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 export class GeminiProvider implements AIProvider {
   name = "gemini";
   isDemo = false;
-  private client: GoogleGenAI;
+
+  private clients: GoogleGenAI[];
   private chatModel: string;
   private embeddingModel: string;
 
   constructor() {
-    if (!process.env.GEMINI_API_KEY) {
-      throw new Error("GEMINI_API_KEY is not set");
+    const apiKeys = getGeminiApiKeys();
+
+    if (apiKeys.length === 0) {
+      throw new Error(
+        "No Gemini API key configured. Set GEMINI_API_KEY_1, GEMINI_API_KEY_2, GEMINI_API_KEY_3, or GEMINI_API_KEY."
+      );
     }
-    this.client = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-    // gemini-2.5-flash is the current stable fast model as of this writing.
-    // Override via GEMINI_CHAT_MODEL if you want a different one (e.g. a
-    // newer preview model), without touching this file.
-    this.chatModel = process.env.GEMINI_CHAT_MODEL ?? "gemini-2.5-flash";
-    this.embeddingModel = process.env.GEMINI_EMBEDDING_MODEL ?? "gemini-embedding-001";
+
+    this.clients = apiKeys.map(
+      (apiKey) => new GoogleGenAI({ apiKey })
+    );
+
+    this.chatModel = getGeminiChatModel();
+    this.embeddingModel = getGeminiEmbeddingModel();
   }
 
-  async complete(options: LLMCompletionOptions): Promise<string> {
-    const { systemInstruction, contents } = toGeminiContents(options.messages);
+  async complete(
+    options: LLMCompletionOptions
+  ): Promise<string> {
+    const { systemInstruction, contents } = toGeminiContents(
+      options.messages
+    );
+
     const jsonMode = wantsJsonResponse(options.messages);
+    let lastError: unknown;
 
-    const response = await this.client.models.generateContent({
-      model: this.chatModel,
-      contents,
-      config: {
-        systemInstruction,
-        temperature: options.temperature ?? 0.2,
-        maxOutputTokens: options.maxTokens ?? 1000,
-        ...(jsonMode ? { responseMimeType: "application/json" } : {}),
-      },
-    });
+    for (let i = 0; i < this.clients.length; i++) {
+      try {
+        const response =
+          await this.clients[i].models.generateContent({
+            model: this.chatModel,
+            contents,
+            config: {
+              systemInstruction,
+              temperature: options.temperature ?? 0.2,
+              maxOutputTokens: options.maxTokens ?? 1000,
+              ...(jsonMode
+                ? { responseMimeType: "application/json" }
+                : {}),
+            },
+          });
 
-    return response.text ?? "";
+        return response.text ?? "";
+      } catch (error) {
+        lastError = error;
+
+        console.error(
+          `Gemini generation failed on key ${i + 1}:`,
+          error
+        );
+      }
+    }
+
+    if (getGrokApiKey()) {
+      try {
+        return await generateWithGrok(
+          options.messages,
+          options.temperature ?? 0.2,
+          options.maxTokens ?? 1000
+        );
+      } catch (error) {
+        lastError = error;
+        console.error("Grok fallback failed:", error);
+      }
+    }
+
+    throw new Error(
+      "All configured AI providers are currently unavailable.",
+      {
+        cause: lastError,
+      }
+    );
   }
 
   async *streamComplete(
     options: LLMCompletionOptions
   ): AsyncGenerator<LLMStreamChunk> {
-    const { systemInstruction, contents } = toGeminiContents(options.messages);
+    const { systemInstruction, contents } = toGeminiContents(
+      options.messages
+    );
+
     const jsonMode = wantsJsonResponse(options.messages);
+    let lastError: unknown;
 
-    const stream = await this.client.models.generateContentStream({
-      model: this.chatModel,
-      contents,
-      config: {
-        systemInstruction,
-        temperature: options.temperature ?? 0.2,
-        maxOutputTokens: options.maxTokens ?? 1000,
-        ...(jsonMode ? { responseMimeType: "application/json" } : {}),
-      },
-    });
+    for (let i = 0; i < this.clients.length; i++) {
+      let emitted = false;
 
-    for await (const chunk of stream) {
-      const delta = chunk.text ?? "";
-      if (delta) yield { delta, done: false };
+      try {
+        const stream =
+          await this.clients[i].models.generateContentStream({
+            model: this.chatModel,
+            contents,
+            config: {
+              systemInstruction,
+              temperature: options.temperature ?? 0.2,
+              maxOutputTokens: options.maxTokens ?? 1000,
+              ...(jsonMode
+                ? { responseMimeType: "application/json" }
+                : {}),
+            },
+          });
+
+        try {
+          for await (const chunk of stream) {
+            const delta = chunk.text ?? "";
+
+            if (delta) {
+              emitted = true;
+
+              yield {
+                delta,
+                done: false,
+              };
+            }
+          }
+
+          yield {
+            delta: "",
+            done: true,
+          };
+
+          return;
+        } catch (error) {
+          if (emitted) {
+            throw error;
+          }
+
+          lastError = error;
+
+          console.warn(
+            `Gemini stream failed on key ${i + 1}. Trying the next key.`
+          );
+        }
+      } catch (error) {
+        if (emitted) {
+          throw error;
+        }
+
+        lastError = error;
+
+        console.warn(
+          `Gemini request failed on key ${i + 1}. Trying the next key.`
+        );
+      }
     }
-    yield { delta: "", done: true };
+
+    if (getGrokApiKey()) {
+      try {
+        let emitted = false;
+
+        for await (const delta of streamWithGrok(
+          options.messages,
+          options.temperature ?? 0.2,
+          options.maxTokens ?? 1000
+        )) {
+          emitted = true;
+
+          yield {
+            delta,
+            done: false,
+          };
+        }
+
+        if (emitted) {
+          yield {
+            delta: "",
+            done: true,
+          };
+        }
+
+        return;
+      } catch (error) {
+        lastError = error;
+        console.error("Grok streaming fallback failed.");
+      }
+    }
+
+    throw new Error(
+      "All configured AI providers are currently unavailable.",
+      {
+        cause: lastError,
+      }
+    );
   }
 
-  async embed(text: string): Promise<EmbeddingResult> {
-    // Match the fixed pgvector(1536) column defined in prisma/schema.prisma.
-    // gemini-embedding-001 defaults to 3072 dims, so we must explicitly
-    // truncate the output to 1536 or every insert/query will fail with a
-    // dimension mismatch against the database column.
-    const response = await this.client.models.embedContent({
-      model: this.embeddingModel,
-      contents: text,
-      config: { outputDimensionality: 1536 },
-    });
-    const embedding = response.embeddings?.[0]?.values ?? [];
-    return { embedding, dimensions: embedding.length };
+  async embed(
+    text: string
+  ): Promise<EmbeddingResult> {
+    if (!text.trim()) {
+      throw new Error(
+        "Cannot generate an embedding for empty text."
+      );
+    }
+
+    let lastError: unknown;
+
+    for (let i = 0; i < this.clients.length; i++) {
+      try {
+        const response =
+          await this.clients[i].models.embedContent({
+            model: this.embeddingModel,
+            contents: text,
+            config: {
+              outputDimensionality: 1536,
+            },
+          });
+
+        const embedding =
+          response.embeddings?.[0]?.values ?? [];
+
+        if (embedding.length !== 1536) {
+          throw new Error(
+            `Expected 1536 dimensions but received ${embedding.length}.`
+          );
+        }
+
+        return {
+          embedding,
+          dimensions: embedding.length,
+        };
+      } catch (error) {
+        lastError = error;
+
+        console.warn(
+          `Gemini embedding failed on key ${i + 1}. Trying the next key.`
+        );
+      }
+    }
+
+    throw new Error(
+      "Embedding generation failed across all configured Gemini keys.",
+      {
+        cause: lastError,
+      }
+    );
   }
 
-  async embedBatch(texts: string[]): Promise<EmbeddingResult[]> {
-    // Gemini's SDK embeds one document at a time; run in parallel.
-    return Promise.all(texts.map((t) => this.embed(t)));
+  async embedBatch(
+    texts: string[]
+  ): Promise<EmbeddingResult[]> {
+    if (texts.length === 0) {
+      return [];
+    }
+
+    const results: EmbeddingResult[] = [];
+
+    for (const text of texts) {
+      results.push(await this.embed(text));
+    }
+
+    return results;
   }
 
   async transcribe(
     audio: Buffer,
     mimeType: string
   ): Promise<TranscriptionResult> {
-    const response = await this.client.models.generateContent({
-      model: this.chatModel,
-      contents: [
-        {
-          role: "user",
-          parts: [
-            { text: "Transcribe this audio exactly as spoken. Return only the transcription text." },
-            { inlineData: { data: audio.toString("base64"), mimeType } },
-          ],
-        },
-      ],
-    });
-    return { text: response.text ?? "" };
+    let lastError: unknown;
+
+    for (let i = 0; i < this.clients.length; i++) {
+      try {
+        const response =
+          await this.clients[i].models.generateContent({
+            model: this.chatModel,
+            contents: [
+              {
+                role: "user",
+                parts: [
+                  {
+                    text: "Transcribe this audio exactly as spoken. Return only the transcription text.",
+                  },
+                  {
+                    inlineData: {
+                      data: audio.toString("base64"),
+                      mimeType,
+                    },
+                  },
+                ],
+              },
+            ],
+          });
+
+        return {
+          text: response.text ?? "",
+        };
+      } catch (error) {
+        lastError = error;
+
+        console.warn(
+          `Gemini transcription failed on key ${i + 1}. Trying the next key.`
+        );
+      }
+    }
+
+    throw new Error(
+      "Transcription failed across all configured Gemini keys.",
+      {
+        cause: lastError,
+      }
+    );
   }
 
   async translate(
@@ -176,22 +564,60 @@ export class GeminiProvider implements AIProvider {
       ],
       temperature: 0,
     });
-    return { text: completion.trim(), sourceLanguage, targetLanguage };
+
+    return {
+      text: completion.trim(),
+      sourceLanguage,
+      targetLanguage,
+    };
   }
 
-  async ocr(image: Buffer, mimeType: string): Promise<OCRResult> {
-    const response = await this.client.models.generateContent({
-      model: this.chatModel,
-      contents: [
-        {
-          role: "user",
-          parts: [
-            { text: "Extract all text from this document image exactly as written. Return only the extracted text." },
-            { inlineData: { data: image.toString("base64"), mimeType } },
-          ],
-        },
-      ],
-    });
-    return { text: response.text ?? "" };
+  async ocr(
+    image: Buffer,
+    mimeType: string
+  ): Promise<OCRResult> {
+    let lastError: unknown;
+
+    for (let i = 0; i < this.clients.length; i++) {
+      try {
+        const response =
+          await this.clients[i].models.generateContent({
+            model: this.chatModel,
+            contents: [
+              {
+                role: "user",
+                parts: [
+                  {
+                    text: "Extract all text from this document image exactly as written. Return only the extracted text.",
+                  },
+                  {
+                    inlineData: {
+                      data: image.toString("base64"),
+                      mimeType,
+                    },
+                  },
+                ],
+              },
+            ],
+          });
+
+        return {
+          text: response.text ?? "",
+        };
+      } catch (error) {
+        lastError = error;
+
+        console.warn(
+          `Gemini OCR failed on key ${i + 1}. Trying the next key.`
+        );
+      }
+    }
+
+    throw new Error(
+      "OCR failed across all configured Gemini keys.",
+      {
+        cause: lastError,
+      }
+    );
   }
 }
