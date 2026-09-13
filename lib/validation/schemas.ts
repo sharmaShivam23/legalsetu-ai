@@ -15,6 +15,27 @@ export const chatMessageSchema = z.object({
   conversationId: z.string().uuid().optional(),
   content: z.string().min(1).max(4000),
   language: z.string().min(2).max(10).default("en"),
+  /**
+   * "quick"     — one-shot grounded answer, no follow-up questions.
+   * "case"      — full case intake: the assistant asks clarifying
+   *               questions before producing an action-plan report
+   *               with a flowchart.
+   * "knowledge" — general legal/constitutional explainer, not tied
+   *               to a personal situation.
+   * "fir"       — guided intake that ends in a downloadable police
+   *               complaint / FIR draft.
+   */
+  mode: z.enum(["quick", "case", "knowledge", "fir"]).default("case"),
+  /** The complaint draft this FIR conversation is building. */
+  firDraftId: z.string().uuid().optional(),
+  /**
+   * This turn is being spoken aloud in voice mode. Retrieval, grounding
+   * and the mode's own logic are unchanged — but the reply is kept short
+   * and free of tables and flowcharts, because a listener cannot skim
+   * and every extra sentence is extra seconds of audio.
+   */
+  voice: z.boolean().optional(),
+  modelId: z.string().optional(),
 });
 
 export const ragSearchSchema = z.object({

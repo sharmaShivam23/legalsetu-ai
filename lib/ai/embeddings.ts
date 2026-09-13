@@ -1,4 +1,4 @@
-import { getAIProvider } from "./provider";
+import { getEmbeddingProvider } from "./provider";
 
 export function cosineSimilarity(a: number[], b: number[]): number {
   let dot = 0;
@@ -14,13 +14,14 @@ export function cosineSimilarity(a: number[], b: number[]): number {
 }
 
 export async function embedText(text: string): Promise<number[]> {
-  const provider = await getAIProvider();
+  // Deliberately NOT the chat provider — see getEmbeddingProvider().
+  const provider = await getEmbeddingProvider();
   const result = await provider.embed(text);
   return result.embedding;
 }
 
 export async function embedTexts(texts: string[]): Promise<number[][]> {
-  const provider = await getAIProvider();
+  const provider = await getEmbeddingProvider();
   const results = await provider.embedBatch(texts);
   return results.map((r) => r.embedding);
 }

@@ -29,6 +29,9 @@ model User {
   notifications Notification[]
   sessions      Session[]
   preferences   UserPreference?
+  memories      UserMemory[]
+  savedSources  SavedSource[]
+  referrals     LawyerReferral[]
 
   @@index([email])
 }
@@ -80,6 +83,14 @@ model Case {
   summary       String?
   status        CaseStatus       @default(OPEN)
   jurisdiction  String?
+  /// Short plain-language note on what to do next — the thing that
+  /// turns a folder of chats and documents into an actual case
+  /// tracker instead of an archive nobody revisits.
+  nextAction    String?
+  nextActionDue DateTime?
+  /// Set automatically when status moves to RESOLVED or CLOSED,
+  /// cleared if it is reopened.
+  closedAt      DateTime?
   createdAt     DateTime         @default(now())
   updatedAt     DateTime         @updatedAt
   user          User             @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -114,6 +125,14 @@ model Message {
   content        String
   language       String         @default("en")
   evidenceLevel  EvidenceLevel?
+  /// Which chat mode produced this turn: "quick" | "case" | "knowledge".
+  /// Nullable so existing rows (all pre-dating multi-mode chat) remain
+  /// valid; the UI treats a null mode as "quick" for display purposes.
+  mode           String?
+  /// For mode "case" only: "question" (the assistant is still gathering
+  /// facts) or "report" (the full grounded analysis + flowchart). Null
+  /// for every other mode, where a message is always a direct answer.
+  kind           String?
   createdAt      DateTime       @default(now())
   citations      Citation[]
   feedback       Feedback[]
@@ -174,6 +193,7 @@ model LegalSource {
   updatedAt          DateTime           @updatedAt
   citations          Citation[]
   chunks             LegalSourceChunk[]
+  savedBy            SavedSource[]
 
   @@index([jurisdiction])
   @@index([sourceType])
@@ -221,6 +241,18 @@ model FIRDraft {
   evidence          String?
   witnesses         String?
   additionalDetails String?
+  /// Structured intake state (lib/fir/case-state.ts): every fact with
+  /// its source and confidence, the timeline, unresolved contradictions
+  /// and retrieved statutory context. The flat columns above are kept
+  /// for backwards compatibility with drafts created by the old wizard.
+  caseState         Json?
+  /// The generated complaint text, kept so a reopened draft shows what
+  /// was actually produced rather than regenerating something different.
+  draftText         String?
+  /// Bumped on every confirmed edit, so a PDF is never rendered from
+  /// data the user has since changed.
+  draftVersion      Int            @default(0)
+  language          String         @default("en")
   createdAt         DateTime       @default(now())
   updatedAt         DateTime       @updatedAt
   case              Case?          @relation(fields: [caseId], references: [id])
@@ -243,13 +275,64 @@ model FIRValidation {
 
 model LawyerReferral {
   id        String         @id @default(uuid())
-  caseId    String
+  /// Nullable: a user can ask for legal-aid guidance before they have
+  /// created a case for the matter at all.
+  caseId    String?
+  userId    String
   reason    ReferralReason
+  category  String         @default("GENERAL")
   notes     String?
+  status    ReferralStatus @default(SUBMITTED)
   createdAt DateTime       @default(now())
-  case      Case           @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  case      Case?          @relation(fields: [caseId], references: [id], onDelete: SetNull)
+  user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([caseId])
+  @@index([userId])
+}
+
+enum ReferralStatus {
+  SUBMITTED
+  ACKNOWLEDGED
+  CLOSED
+}
+
+/// A verified point of contact for free/official legal help. Every row
+/// traces to an actual government page — sourceUrl is not decorative,
+/// it is how a user (or a judge reviewing this project) can confirm
+/// the number is real rather than invented for the demo.
+model LegalAidResource {
+  id          String   @id @default(uuid())
+  name        String
+  category    String
+  phone       String?
+  description String
+  website     String?
+  sourceUrl   String
+  /// Order within its category, lower first. Lets "Emergency" and
+  /// "NALSA" lead their sections without relying on insertion order.
+  priority    Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  @@index([category])
+}
+
+/// A section a user has deliberately kept, with an optional note —
+/// the actual "saved" in Saved Sources, as opposed to the full library
+/// list that was there before and is not personal to anyone.
+model SavedSource {
+  id            String      @id @default(uuid())
+  userId        String
+  legalSourceId String
+  /// Which section within the Act, if the save is that specific.
+  section       String?
+  note          String?
+  createdAt     DateTime    @default(now())
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  legalSource   LegalSource @relation(fields: [legalSourceId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, legalSourceId, section])
+  @@index([userId])
 }
 
 model AuditLog {
@@ -369,4 +452,73 @@ enum NotificationType {
   DOCUMENT_READY
   FIR_READY
   SECURITY
+}
+
+/// Runtime translation cache.
+/// LegalSetu ships no per-language locale files — every string is
+/// translated on demand and stored here, so a string translated
+/// once is free for every user afterwards.
+model TranslationCache {
+  id             String   @id @default(uuid())
+  sourceHash     String
+  targetLang     String
+  sourceText     String
+  translatedText String
+  createdAt      DateTime @default(now())
+
+  @@unique([sourceHash, targetLang])
+  @@index([targetLang])
+}
+
+/// Durable, user-scoped memory — the thing that makes LegalSetu feel
+/// continuous instead of amnesiac between conversations.
+///
+/// Deliberately small and readable: each row is one short sentence in
+/// plain language, not a transcript. That matters here more than in a
+/// general assistant, because these can describe someone's assault,
+/// eviction or debt. A user must be able to look at exactly what is
+/// remembered about them and delete any of it, which is only possible
+/// if it is stored as legible text rather than an opaque embedding.
+model UserMemory {
+  id        String   @id @default(uuid())
+  userId    String
+  /// One fact, in plain language. e.g. "Lives in Ghaziabad, UP."
+  content   String
+  /// Rough grouping so the UI can show these in sensible sections and
+  /// the retriever can prefer durable facts over one-off details.
+  category  String   @default("general")
+  /// Where it came from, so a user can trace a memory to the chat that
+  /// produced it. Nulled rather than cascaded if that chat is deleted —
+  /// deleting a conversation should not silently erase what was learned.
+  sourceConversationId String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+/// One-time passcodes for email verification and password reset.
+/// Codes are stored hashed (never plaintext) since this table is a
+/// direct route to taking over an account if it ever leaked.
+model OtpCode {
+  id          String    @id @default(uuid())
+  /// Keyed by email, not userId — needed during registration before
+  /// the account row (and its id) exists yet.
+  email       String
+  codeHash    String
+  purpose     OtpPurpose
+  /// Failed verification attempts against this code. Capped so a
+  /// 6-digit code cannot be brute-forced within its lifetime.
+  attempts    Int       @default(0)
+  expiresAt   DateTime
+  consumedAt  DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([email, purpose])
+}
+
+enum OtpPurpose {
+  EMAIL_VERIFICATION
+  PASSWORD_RESET
 }

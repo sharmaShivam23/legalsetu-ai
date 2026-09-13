@@ -9,7 +9,10 @@ services:
       POSTGRES_PASSWORD: legalsetu
       POSTGRES_DB: legalsetu
     ports:
-      - "5432:5432"
+      # Host port 5433, not 5432 — another project's Postgres container
+      # already owns 5432 on this machine. Internal container port (used
+      # by the `app` service below via `db:5432`) is unaffected.
+      - "5433:5432"
     volumes:
       - legalsetu_db_data:/var/lib/postgresql/data
     healthcheck:
@@ -22,7 +25,8 @@ services:
     image: redis:7-alpine
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      # Host port 6380 — 6379 is already taken by another project.
+      - "6380:6379"
 
   app:
     build:

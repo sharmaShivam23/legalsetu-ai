@@ -2,35 +2,72 @@
 
 import { prisma } from "@/lib/db/prisma";
 import { embedText, cosineSimilarity } from "@/lib/ai/embeddings";
-import type { RAGSearchFilters, RAGSearchResult, RetrievedChunk, EvidenceLevel } from "./types";
+import { extractSectionNumber } from "./sections";
+import { logger } from "@/lib/logging/logger";
+import type {
+  RAGSearchFilters,
+  RAGSearchResult,
+  RetrievedChunk,
+  EvidenceLevel,
+} from "./types";
 
 const TOP_K = 6;
 const MIN_SIMILARITY = 0.15;
 
+/** Short-lived cache of query embeddings — repeated/similar questions are common. */
+const QUERY_EMBEDDING_CACHE = new Map<string, number[]>();
+const QUERY_CACHE_LIMIT = 500;
+
+function cacheKey(query: string): string {
+  return query.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+/**
+ * Embeds the query, reusing a cached vector when the same question
+ * has been asked before. The embedding round-trip is the single
+ * biggest latency in retrieval, so this matters for perceived speed.
+ */
+async function embedQuery(query: string): Promise<number[]> {
+  const key = cacheKey(query);
+  const cached = QUERY_EMBEDDING_CACHE.get(key);
+  if (cached) return cached;
+
+  const embedding = await embedText(query);
+
+  if (QUERY_EMBEDDING_CACHE.size >= QUERY_CACHE_LIMIT) {
+    const oldest = QUERY_EMBEDDING_CACHE.keys().next().value;
+    if (oldest !== undefined) QUERY_EMBEDDING_CACHE.delete(oldest);
+  }
+  QUERY_EMBEDDING_CACHE.set(key, embedding);
+  return embedding;
+}
+
 /**
  * Vector similarity search over verified LegalSourceChunk rows.
  *
- * In production with pgvector, this should use a native SQL query
- * with the `<=>` cosine-distance operator for performance:
+ * Uses pgvector's `<=>` cosine-distance operator, with a pure-JS
+ * fallback for environments where the extension or the database
+ * is unavailable (demo mode / local dev).
  *
- *   SELECT id, 1 - (embedding <=> $1::vector) AS similarity
- *   FROM "LegalSourceChunk"
- *   ORDER BY embedding <=> $1::vector
- *   LIMIT $2;
- *
- * That raw-SQL version is provided in `vectorSearchSQL()` below.
- * The JS fallback (`vectorSearchInMemory`) is used automatically
- * when the SQL query fails (e.g. no pgvector extension configured
- * yet), so local development never hard-breaks. NOTE: because
- * Prisma Client cannot select `Unsupported("vector")` columns
- * through its normal query API, the fallback also fetches
- * embeddings via raw SQL rather than `prisma.legalSource.findMany`.
+ * NOTE: Prisma Client cannot select an `Unsupported("vector")`
+ * column through its normal query API, so BOTH paths go through
+ * raw SQL — the fallback casts the embedding to text and parses
+ * it back, rather than using `prisma.legalSource.findMany`.
  */
 export async function retrieveRelevantChunks(
   query: string,
   filters: RAGSearchFilters = {}
 ): Promise<RAGSearchResult> {
-  const queryEmbedding = await embedText(query);
+  // Some providers (e.g. Groq) have no embeddings endpoint. Without a
+  // query vector there is nothing to search, so we report "no sources"
+  // instead of failing the whole request — the grounding prompt then
+  // makes the model say it lacks sources rather than inventing any.
+  let queryEmbedding: number[];
+  try {
+    queryEmbedding = await embedQuery(query);
+  } catch {
+    return { chunks: [], evidenceLevel: "INSUFFICIENT" };
+  }
 
   let chunks: RetrievedChunk[] = [];
 
@@ -39,9 +76,18 @@ export async function retrieveRelevantChunks(
   } catch (err) {
     // Log the real reason the primary SQL path failed — silently
     // swallowing this made past failures impossible to diagnose.
-    console.error("[retriever] vectorSearchSQL failed, falling back to in-memory search:", err);
+    logger.warn("Vector SQL search failed, using in-memory fallback", {
+      errorType: String(err).slice(0, 200),
+    });
     chunks = await vectorSearchInMemory(queryEmbedding, filters);
   }
+
+  // Recover a section number from the chunk text when the ingestion
+  // pipeline did not record one, so answers can cite precisely.
+  chunks = chunks.map((c) => ({
+    ...c,
+    section: c.section ?? extractSectionNumber(c.text),
+  }));
 
   const evidenceLevel = computeEvidenceLevel(chunks);
   return { chunks, evidenceLevel };
@@ -53,7 +99,17 @@ async function vectorSearchSQL(
 ): Promise<RetrievedChunk[]> {
   const vectorLiteral = `[${queryEmbedding.join(",")}]`;
 
-  const rows = await (prisma.$queryRawUnsafe as (query: string, ...values: unknown[]) => Promise<any[]>)(
+  // SECURITY: every filter value is bound as a parameter. These values
+  // arrive from a public, unauthenticated endpoint (/api/rag/search),
+  // so string-interpolating them into the SQL would be an injection
+  // hole. `$3 IS NULL OR col = $3` keeps one prepared statement able
+  // to serve both the filtered and unfiltered cases.
+  const rows = await (
+    prisma.$queryRawUnsafe as (
+      query: string,
+      ...values: unknown[]
+    ) => Promise<any[]>
+  )(
     `
     SELECT
       c.id as "chunkId",
@@ -69,13 +125,16 @@ async function vectorSearchSQL(
     FROM "LegalSourceChunk" c
     JOIN "LegalSource" s ON s.id = c."sourceId"
     WHERE s."verificationStatus" = 'VERIFIED'
-      ${filters.jurisdiction ? `AND s.jurisdiction = '${filters.jurisdiction}'` : ""}
-      ${filters.language ? `AND s.language = '${filters.language}'` : ""}
+      AND c.embedding IS NOT NULL
+      AND ($3::text IS NULL OR s.jurisdiction = $3::text)
+      AND ($4::text IS NULL OR s.language = $4::text)
     ORDER BY c.embedding <=> $1::vector
     LIMIT $2
     `,
     vectorLiteral,
-    TOP_K
+    TOP_K,
+    filters.jurisdiction ?? null,
+    filters.language ?? null
   );
 
   return rows
@@ -97,7 +156,18 @@ async function vectorSearchInMemory(
   queryEmbedding: number[],
   filters: RAGSearchFilters
 ): Promise<RetrievedChunk[]> {
-  const rows = await (prisma.$queryRawUnsafe as (query: string, ...values: unknown[]) => Promise<any[]>)(
+  // SECURITY: filters are bound as parameters, never interpolated.
+  // These values arrive from /api/rag/search, which is public and
+  // unauthenticated, so `AND s.jurisdiction = '${filters.jurisdiction}'`
+  // would be a live SQL injection hole. The `$n IS NULL OR col = $n`
+  // form lets one prepared statement serve the filtered and
+  // unfiltered cases alike — same approach as vectorSearchSQL above.
+  const rows = await (
+    prisma.$queryRawUnsafe as (
+      query: string,
+      ...values: unknown[]
+    ) => Promise<any[]>
+  )(
     `
     SELECT
       c.id as "chunkId",
@@ -113,12 +183,16 @@ async function vectorSearchInMemory(
     FROM "LegalSourceChunk" c
     JOIN "LegalSource" s ON s.id = c."sourceId"
     WHERE s."verificationStatus" = 'VERIFIED'
-      ${filters.jurisdiction ? `AND s.jurisdiction = '${filters.jurisdiction}'` : ""}
-      ${filters.language ? `AND s.language = '${filters.language}'` : ""}
       AND c.embedding IS NOT NULL
-    `
+      AND ($1::text IS NULL OR s.jurisdiction = $1::text)
+      AND ($2::text IS NULL OR s.language = $2::text)
+    `,
+    filters.jurisdiction ?? null,
+    filters.language ?? null
   ).catch((err) => {
-    console.error("[retriever] vectorSearchInMemory raw fetch also failed:", err);
+    logger.error("In-memory fallback fetch failed too", {
+      errorType: String(err).slice(0, 200),
+    });
     return [] as any[];
   });
 

@@ -9,6 +9,7 @@
 import { readFileSync } from "fs";
 import { PrismaClient } from "@prisma/client";
 import { chunkText } from "../lib/rag/chunker";
+import { chunkStatute } from "../lib/rag/sections";
 
 const prisma = new PrismaClient();
 
@@ -32,7 +33,26 @@ async function main() {
   }
 
   const rawText = readFileSync(args.file, "utf-8");
-  const chunks = chunkText(rawText);
+
+  // Statutes are split on real section boundaries so every chunk knows
+  // which section it came from. That is what lets an answer cite
+  // "Section 303" and have the citation guard verify it. Pass
+  // --chunking=plain for material that has no numbered sections
+  // (judgments, circulars, guidance notes).
+  const useStatuteChunking =
+    (args.chunking ?? "statute") === "statute" &&
+    (args.sourceType ?? "STATUTE") === "STATUTE";
+
+  const chunks = useStatuteChunking
+    ? chunkStatute(rawText)
+    : chunkText(rawText).map((c) => ({ section: "", text: c.text }));
+
+  const labelled = chunks.filter((c) => c.section).length;
+  console.log(
+    `Prepared ${chunks.length} chunks (${labelled} carry a section number) using ${
+      useStatuteChunking ? "section-aware" : "plain"
+    } chunking.`
+  );
 
   const source = await prisma.legalSource.create({
     data: {
@@ -44,7 +64,10 @@ async function main() {
       officialUrl: args.url,
       verificationStatus: "PENDING_REVIEW", // admin must explicitly verify
       chunks: {
-        create: chunks.map((c) => ({ text: c.text })),
+        create: chunks.map((c) => ({
+          text: c.text,
+          section: c.section || null,
+        })),
       },
     },
   });

@@ -54,11 +54,44 @@ export class MockProvider implements AIProvider {
     // from the prompt itself and answer with valid, clearly-labeled demo
     // JSON instead, so demo mode actually demonstrates the real output
     // shape instead of masking it behind a fallback.
+    // Batch-translation requests (lib/i18n/translator.ts) also demand
+    // strict JSON, but of a completely different shape. Check for them
+    // FIRST, otherwise every demo-mode translation would receive the
+    // document-analysis payload below and silently fall back to English.
+    if (this.wantsTranslationBatch(options.messages)) {
+      return this.buildDemoTranslationJson(options.messages);
+    }
+
     if (this.wantsJsonAnalysis(options.messages)) {
       return this.buildDemoAnalysisJson(query);
     }
 
     return this.buildDemoAnswer(query);
+  }
+
+  private wantsTranslationBatch(messages: ChatMessage[]): boolean {
+    return messages.some((m) => m.content.includes("LEGALSETU_TRANSLATION_BATCH"));
+  }
+
+  /**
+   * Returns correctly-shaped translation JSON, but does NOT invent a
+   * translation: the demo provider cannot translate, and prefixing
+   * every string with "[HINDI DEMO] ..." defaced every page and made
+   * the app look broken. Each line comes back unchanged, so the UI
+   * stays readable English while lib/i18n/translator.ts reports the
+   * degraded state and the user is told an API key is required.
+   */
+  private buildDemoTranslationJson(messages: ChatMessage[]): string {
+    const prompt = messages.map((m) => m.content).join("\n");
+    const block = prompt.split("--- LINES ---")[1]?.split("--- END ---")[0] ?? "";
+
+    const translations = block
+      .split("\n")
+      .map((line) => line.match(/^(\d+)\s>>\s([\s\S]*)$/))
+      .filter((m): m is RegExpMatchArray => Boolean(m))
+      .map((m) => ({ i: Number(m[1]), t: m[2] }));
+
+    return JSON.stringify({ translations });
   }
 
   private wantsJsonAnalysis(messages: ChatMessage[]): boolean {

@@ -3,35 +3,89 @@
 import { useFormContext, useFieldArray } from "react-hook-form";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { Button } from "@/components/ui/button";
-import { Plus, Trash2 } from "lucide-react";
-import { INCIDENT_TYPES } from "@/lib/fir/types";
+import {
+  Plus,
+  Trash2,
+  Wallet,
+  Laptop,
+  ShieldAlert,
+  Hammer,
+  Home,
+  HandCoins,
+  HelpCircle,
+  Check,
+} from "lucide-react";
+import { INCIDENT_TYPES, type IncidentType } from "@/lib/fir/types";
 import type { FirWizardDataInput } from "@/lib/validation/fir-wizard-schema";
 import { isoToLocalInput, localInputToIso } from "@/lib/fir/datetime";
 
-const fieldLabel = "mb-2 block text-sm font-semibold text-slate-900 dark:text-slate-100";
-const helpText = "mt-1.5 text-xs text-slate-500 dark:text-slate-400 leading-relaxed";
-const selectClass =
-  "w-full rounded-xl border border-slate-200 dark:border-white/10 bg-white dark:bg-slate-900 text-sm text-slate-900 dark:text-slate-100 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 transition-all shadow-xs";
-const inputClass = 
-  "border-slate-200 dark:border-white/10 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus-visible:ring-blue-500";
+const fieldLabel = "mb-2 block text-sm font-semibold text-textPrimary";
+const helpText = "mt-1.5 text-xs text-textSecondary leading-relaxed";
+const inputClass =
+  "border-borderCustom bg-canvas text-textPrimary placeholder:text-textSecondary focus-visible:ring-brandBlue";
+const addButtonClass =
+  "flex items-center gap-1.5 rounded-lg border border-borderCustom bg-canvas px-3 py-1.5 text-xs font-semibold text-textPrimary transition-colors hover:border-brandBlue/40 hover:text-brandBlue";
+const removeButtonClass =
+  "rounded-lg p-2 text-textSecondary transition-colors hover:bg-canvas hover:text-rose-500";
 
 // -------------------- Step 1: Incident Categorization --------------------
+
+/** One icon per incident type — the single change that does the most
+ *  to make this step feel considered rather than a bare <select>. */
+const INCIDENT_ICONS: Record<IncidentType, typeof Wallet> = {
+  Theft: Wallet,
+  "Cybercrime / Fraud": Laptop,
+  "Physical Assault": ShieldAlert,
+  "Property Damage": Hammer,
+  "Domestic Violence": Home,
+  Extortion: HandCoins,
+  Other: HelpCircle,
+};
+
 export function StepIncidentType() {
-  const { register, formState: { errors } } = useFormContext<FirWizardDataInput>();
+  const {
+    watch,
+    setValue,
+    formState: { errors },
+  } = useFormContext<FirWizardDataInput>();
+  const selected = watch("incidentType");
+
   return (
     <div className="space-y-1.5">
       <label className={fieldLabel}>What kind of incident are you reporting?</label>
-      <select className={selectClass} {...register("incidentType")}>
-        <option value="" className="bg-white dark:bg-slate-900">Select incident type</option>
-        {INCIDENT_TYPES.map((t) => (
-          <option key={t} value={t} className="bg-white dark:bg-slate-900">{t}</option>
-        ))}
-      </select>
+      <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+        {INCIDENT_TYPES.map((type) => {
+          const Icon = INCIDENT_ICONS[type];
+          const active = selected === type;
+          return (
+            <button
+              key={type}
+              type="button"
+              onClick={() => setValue("incidentType", type, { shouldDirty: true, shouldValidate: true })}
+              className={
+                "relative flex flex-col items-center gap-2 rounded-xl border-2 px-3 py-4 text-center transition-all " +
+                (active
+                  ? "border-brandBlue bg-brandBlue/10 shadow-sm"
+                  : "border-borderCustom bg-canvas hover:border-brandBlue/40")
+              }
+            >
+              {active && (
+                <span className="absolute right-1.5 top-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-brandBlue text-white">
+                  <Check className="h-2.5 w-2.5" />
+                </span>
+              )}
+              <Icon className={"h-5 w-5 " + (active ? "text-brandBlue" : "text-textSecondary")} />
+              <span className={"text-xs font-medium leading-tight " + (active ? "text-brandBlue" : "text-textPrimary")}>
+                {type}
+              </span>
+            </button>
+          );
+        })}
+      </div>
       {errors.incidentType && (
-        <p className="mt-1 text-xs text-rose-600 dark:text-rose-400">{errors.incidentType.message}</p>
+        <p className="mt-1 text-xs text-rose-500">{errors.incidentType.message}</p>
       )}
-      <p className={helpText}>This sets which statutory sections we'll suggest later.</p>
+      <p className={helpText}>This sets which statutory sections we&apos;ll suggest later.</p>
     </div>
   );
 }
@@ -45,7 +99,7 @@ export function StepDateTime() {
   return (
     <div className="space-y-4">
       <div>
-        <label className={fieldLabel}>Exact date & time of incident</label>
+        <label className={fieldLabel}>Exact date &amp; time of incident</label>
         <Input
           type="datetime-local"
           className={inputClass}
@@ -64,11 +118,11 @@ export function StepDateTime() {
       </div>
       <div>
         <label className={fieldLabel}>Reason for delay in reporting (if any)</label>
-        <Textarea 
-          rows={2} 
+        <Textarea
+          rows={2}
           className={inputClass}
-          {...register("delayReason")} 
-          placeholder="Optional — helps establish timeline credibility" 
+          {...register("delayReason")}
+          placeholder="Optional — helps establish timeline credibility"
         />
       </div>
     </div>
@@ -82,11 +136,11 @@ export function StepLocation() {
     <div className="space-y-4">
       <div>
         <label className={fieldLabel}>Incident site address</label>
-        <Textarea 
-          rows={2} 
+        <Textarea
+          rows={2}
           className={inputClass}
-          {...register("address")} 
-          placeholder="Full address where it happened" 
+          {...register("address")}
+          placeholder="Full address where it happened"
         />
       </div>
       <div className="grid grid-cols-2 gap-3">
@@ -124,14 +178,14 @@ export function StepAccused() {
 
   return (
     <div className="space-y-4">
-      <label className="flex items-center gap-2 text-sm font-medium text-slate-900 dark:text-slate-100 cursor-pointer select-none">
+      <label className="flex cursor-pointer select-none items-center gap-2.5 rounded-xl border border-borderCustom bg-canvas px-3.5 py-3 text-sm font-medium text-textPrimary">
         <input
           type="checkbox"
-          className="h-4 w-4 rounded border-slate-300 dark:border-slate-700 text-blue-600 focus:ring-blue-500 bg-white dark:bg-slate-900"
+          className="h-4 w-4 rounded border-borderCustom text-brandBlue focus:ring-brandBlue"
           checked={!!unknown}
           onChange={(e) => setValue("accusedUnknown", e.target.checked, { shouldDirty: true })}
         />
-        Accused is unknown
+        The accused is unknown to me
       </label>
 
       {!unknown && (
@@ -142,11 +196,7 @@ export function StepAccused() {
           </div>
           <div>
             <label className={fieldLabel}>Physical description</label>
-            <Textarea 
-              rows={2} 
-              className={inputClass}
-              {...register("accusedDescription")} 
-            />
+            <Textarea rows={2} className={inputClass} {...register("accusedDescription")} />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
@@ -170,43 +220,35 @@ export function StepLossHarm() {
   const { fields, append, remove } = useFieldArray({ control, name: "lossItems" });
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
       <div>
         <div className="mb-2 flex items-center justify-between">
           <label className={fieldLabel + " mb-0"}>Itemized property / loss</label>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => append({ description: "", value: undefined })}
-            className="border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800"
-          >
-            <Plus className="mr-1 h-3.5 w-3.5" /> Add item
-          </Button>
+          <button type="button" onClick={() => append({ description: "", value: undefined })} className={addButtonClass}>
+            <Plus className="h-3.5 w-3.5" />
+            Add item
+          </button>
         </div>
         <div className="space-y-2">
           {fields.length === 0 && (
-            <p className="text-xs text-slate-400 dark:text-slate-500 italic">No items added yet.</p>
+            <p className="rounded-xl border border-dashed border-borderCustom px-3 py-3 text-center text-xs text-textSecondary">
+              No items added yet.
+            </p>
           )}
           {fields.map((field, idx) => (
-            <div key={field.id} className="flex items-center gap-2">
+            <div key={field.id} className="flex items-center gap-2 rounded-xl border border-borderCustom bg-canvas p-2">
               <Input
-                className={`flex-1 ${inputClass}`}
+                className={`flex-1 border-0 bg-transparent ${inputClass}`}
                 placeholder="Item description"
                 {...register(`lossItems.${idx}.description` as const)}
               />
               <Input
-                className={`w-32 ${inputClass}`}
+                className={`w-28 border-0 bg-transparent ${inputClass}`}
                 type="number"
                 placeholder="Value (₹)"
                 {...register(`lossItems.${idx}.value` as const, { valueAsNumber: true })}
               />
-              <button
-                type="button"
-                onClick={() => remove(idx)}
-                className="rounded-lg p-2 text-slate-400 dark:text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-rose-600 dark:hover:text-rose-400 transition-colors"
-                aria-label="Remove item"
-              >
+              <button type="button" onClick={() => remove(idx)} className={removeButtonClass} aria-label="Remove item">
                 <Trash2 className="h-4 w-4" />
               </button>
             </div>
@@ -221,12 +263,7 @@ export function StepLossHarm() {
 
       <div>
         <label className={fieldLabel}>Physical injury details</label>
-        <Textarea 
-          rows={2} 
-          className={inputClass}
-          {...register("injuryDetails")} 
-          placeholder="Optional" 
-        />
+        <Textarea rows={2} className={inputClass} {...register("injuryDetails")} placeholder="Optional" />
       </div>
     </div>
   );
@@ -237,20 +274,33 @@ export function StepNarrative() {
   const { register, watch } = useFormContext<FirWizardDataInput>();
   const narrative = watch("narrative") ?? "";
   const words = narrative.trim() ? narrative.trim().split(/\s+/).length : 0;
+  const progress = Math.min(100, Math.round((words / 100) * 100));
 
   return (
-    <div className="space-y-1.5">
+    <div className="space-y-2">
       <label className={fieldLabel}>Describe exactly what happened</label>
-      <Textarea 
-        rows={8} 
+      <Textarea
+        rows={8}
         className={`${inputClass} leading-relaxed`}
-        {...register("narrative")} 
-        placeholder="Write a detailed, chronological account. Minimum 100 words recommended." 
+        {...register("narrative")}
+        placeholder="Write a detailed, chronological account. Minimum 100 words recommended."
       />
-      <p className={helpText}>
-        {words} word{words === 1 ? "" : "s"}{" "}
-        {words < 100 && <span className="text-amber-600 dark:text-amber-400 font-medium">— aim for at least 100 for a complete draft</span>}
-      </p>
+      <div className="flex items-center gap-3">
+        <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-borderCustom">
+          <div
+            className={"h-full rounded-full transition-all duration-300 " + (words >= 100 ? "bg-emerald-500" : "bg-amber-500")}
+            style={{ width: `${progress}%` }}
+          />
+        </div>
+        <span className="shrink-0 text-xs font-medium text-textSecondary">
+          {words} word{words === 1 ? "" : "s"}
+        </span>
+      </div>
+      {words < 100 && (
+        <p className="text-xs font-medium text-amber-600 dark:text-amber-400">
+          Aim for at least 100 words for a complete draft.
+        </p>
+      )}
     </div>
   );
 }
@@ -261,32 +311,34 @@ export function StepWitnesses() {
   const { fields, append, remove } = useFieldArray({ control, name: "witnesses" });
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
       <div>
         <div className="mb-2 flex items-center justify-between">
           <label className={fieldLabel + " mb-0"}>Witnesses</label>
-          <Button 
-            type="button" 
-            variant="outline" 
-            size="sm"
-            onClick={() => append({ name: "", contact: "" })}
-            className="border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800"
-          >
-            <Plus className="mr-1 h-3.5 w-3.5" /> Add witness
-          </Button>
+          <button type="button" onClick={() => append({ name: "", contact: "" })} className={addButtonClass}>
+            <Plus className="h-3.5 w-3.5" />
+            Add witness
+          </button>
         </div>
         <div className="space-y-2">
-          {fields.length === 0 && <p className="text-xs text-slate-400 dark:text-slate-500 italic">No witnesses added yet.</p>}
+          {fields.length === 0 && (
+            <p className="rounded-xl border border-dashed border-borderCustom px-3 py-3 text-center text-xs text-textSecondary">
+              No witnesses added yet.
+            </p>
+          )}
           {fields.map((field, idx) => (
-            <div key={field.id} className="flex items-center gap-2">
-              <Input className={`flex-1 ${inputClass}`} placeholder="Name" {...register(`witnesses.${idx}.name` as const)} />
-              <Input className={`flex-1 ${inputClass}`} placeholder="Contact (optional)" {...register(`witnesses.${idx}.contact` as const)} />
-              <button
-                type="button"
-                onClick={() => remove(idx)}
-                className="rounded-lg p-2 text-slate-400 dark:text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-rose-600 dark:hover:text-rose-400 transition-colors"
-                aria-label="Remove witness"
-              >
+            <div key={field.id} className="flex items-center gap-2 rounded-xl border border-borderCustom bg-canvas p-2">
+              <Input
+                className={`flex-1 border-0 bg-transparent ${inputClass}`}
+                placeholder="Name"
+                {...register(`witnesses.${idx}.name` as const)}
+              />
+              <Input
+                className={`flex-1 border-0 bg-transparent ${inputClass}`}
+                placeholder="Contact (optional)"
+                {...register(`witnesses.${idx}.contact` as const)}
+              />
+              <button type="button" onClick={() => remove(idx)} className={removeButtonClass} aria-label="Remove witness">
                 <Trash2 className="h-4 w-4" />
               </button>
             </div>
@@ -296,11 +348,11 @@ export function StepWitnesses() {
 
       <div>
         <label className={fieldLabel}>Evidence references</label>
-        <Textarea 
-          rows={3} 
+        <Textarea
+          rows={3}
           className={inputClass}
-          {...register("evidenceRefs")} 
-          placeholder="Photos, receipts, CCTV clips, file names, etc." 
+          {...register("evidenceRefs")}
+          placeholder="Photos, receipts, CCTV clips, file names, etc."
         />
       </div>
     </div>
@@ -317,26 +369,29 @@ export function StepReview() {
     ["Date/time", data.incidentDateTime ? new Date(data.incidentDateTime).toLocaleString("en-IN") : undefined],
     ["Location", [data.address, data.district, data.state].filter(Boolean).join(", ")],
     ["Accused", data.accusedUnknown ? "Unknown" : data.accusedName],
-    ["Narrative", data.narrative ? `${data.narrative.slice(0, 140)}${data.narrative.length > 140 ? "…" : ""}` : undefined],
+    [
+      "Narrative",
+      data.narrative ? `${data.narrative.slice(0, 140)}${data.narrative.length > 140 ? "…" : ""}` : undefined,
+    ],
     ["Witnesses", data.witnesses?.map((w) => w.name).filter(Boolean).join(", ")],
   ];
 
   return (
     <div className="space-y-4">
-      <div className="rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50/50 dark:bg-slate-800/40 p-4 text-xs text-slate-700 dark:text-slate-300 space-y-2">
+      <div className="space-y-2.5 rounded-xl border border-borderCustom bg-canvas p-4 text-xs">
         {rows.map(([label, value]) =>
           value ? (
             <p key={label} className="leading-relaxed">
-              <span className="font-semibold text-slate-900 dark:text-slate-100">{label}: </span>
-              <span className="text-slate-600 dark:text-slate-400">{value}</span>
+              <span className="font-semibold text-textPrimary">{label}: </span>
+              <span className="text-textSecondary" data-no-translate>{value}</span>
             </p>
           ) : null
         )}
       </div>
-      <label className="flex items-start gap-2.5 text-xs font-medium text-slate-900 dark:text-slate-100 cursor-pointer select-none">
+      <label className="flex cursor-pointer select-none items-start gap-2.5 rounded-xl border border-borderCustom bg-canvas px-3.5 py-3 text-xs font-medium text-textPrimary">
         <input
           type="checkbox"
-          className="mt-0.5 h-4 w-4 rounded border-slate-300 dark:border-slate-700 text-blue-600 focus:ring-blue-500 bg-white dark:bg-slate-900"
+          className="mt-0.5 h-4 w-4 rounded border-borderCustom text-brandBlue focus:ring-brandBlue"
           {...register("confirmed")}
         />
         <span>I confirm the details above are accurate to the best of my knowledge.</span>

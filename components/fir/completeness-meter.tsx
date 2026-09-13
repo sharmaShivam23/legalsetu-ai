@@ -18,10 +18,10 @@ export function CompletenessMeter({ result }: { result: CompletenessResult }) {
       : "text-rose-700 dark:text-rose-400";
 
   return (
-    <div className="space-y-4 rounded-xl border border-slate-200 dark:border-white/10 bg-white dark:bg-slate-900/80 p-4 shadow-sm transition-colors duration-200">
+    <div className="space-y-4 rounded-xl border border-borderCustom bg-card p-4 shadow-sm">
       {/* Header & Score */}
       <div className="flex items-center justify-between">
-        <span className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+        <span className="text-sm font-semibold text-textPrimary">
           Draft completeness
         </span>
         <span className={cn("text-base font-bold", textColor)}>
@@ -30,7 +30,7 @@ export function CompletenessMeter({ result }: { result: CompletenessResult }) {
       </div>
 
       {/* Progress Bar Container */}
-      <div className="h-2.5 w-full overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
+      <div className="h-2.5 w-full overflow-hidden rounded-full bg-canvas">
         <div
           className={cn("h-full transition-all duration-500 ease-out", barColor)}
           style={{ width: `${score}%` }}
@@ -45,15 +45,15 @@ export function CompletenessMeter({ result }: { result: CompletenessResult }) {
             className={cn(
               "flex items-center justify-between rounded-lg border px-2.5 py-1.5 text-xs transition-colors",
               b.complete
-                ? "border-emerald-100 dark:border-emerald-500/20 bg-emerald-50/50 dark:bg-emerald-500/10 text-slate-800 dark:text-slate-200"
-                : "border-slate-100 dark:border-white/5 bg-slate-50/50 dark:bg-slate-800/40 text-slate-500 dark:text-slate-400"
+                ? "border-emerald-500/20 bg-emerald-500/10 text-textPrimary"
+                : "border-borderCustom bg-canvas text-textSecondary"
             )}
           >
             <div className="flex items-center gap-1.5 truncate pr-2">
               {b.complete ? (
                 <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
               ) : (
-                <Circle className="h-3.5 w-3.5 shrink-0 text-slate-300 dark:text-slate-600" />
+                <Circle className="h-3.5 w-3.5 shrink-0 text-textSecondary opacity-40" />
               )}
               <span className="truncate font-medium">{b.label}</span>
             </div>
@@ -61,7 +61,7 @@ export function CompletenessMeter({ result }: { result: CompletenessResult }) {
             <span
               className={cn(
                 "font-mono font-semibold",
-                b.complete ? "text-emerald-700 dark:text-emerald-400" : "text-slate-400 dark:text-slate-500"
+                b.complete ? "text-emerald-700 dark:text-emerald-400" : "text-textSecondary"
               )}
             >
               {b.earned}/{b.weight}%

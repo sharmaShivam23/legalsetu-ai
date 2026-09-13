@@ -40,6 +40,17 @@ export const authConfig: NextAuthConfig = {
           return null;
         }
 
+        // Same generic failure as a wrong password — the login page
+        // cannot distinguish "unverified" from "wrong credentials"
+        // without also being able to confirm an email is registered,
+        // which is exactly the enumeration this app avoids everywhere
+        // else in auth. The login page always shows a standing "resend
+        // verification" link so this never leaves anyone stuck.
+        if (!user.emailVerified) {
+          logger.warn("Login blocked: email not verified", { userId: user.id });
+          return null;
+        }
+
         return {
           id: user.id,
           name: user.name,

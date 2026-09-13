@@ -5,8 +5,20 @@ import { useForm, FormProvider } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useSession } from "next-auth/react";
 import { toast } from "sonner";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import {
+  Tags,
+  Clock,
+  MapPin,
+  UserSearch,
+  Coins,
+  FileText,
+  Users,
+  CheckCircle2,
+  ArrowLeft,
+  ArrowRight,
+  Sparkles,
+  Check,
+} from "lucide-react";
 import { firWizardDataSchema, type FirWizardDataInput } from "@/lib/validation/fir-wizard-schema";
 import { WIZARD_STEP_KEYS, WIZARD_STEP_LABELS } from "@/lib/fir/types";
 import type { FIRWizardData } from "@/lib/fir/types";
@@ -33,6 +45,11 @@ const STEP_COMPONENTS = [
   StepWitnesses,
   StepReview,
 ];
+
+/** One icon per step, in the same order as WIZARD_STEP_KEYS — this is
+ *  what turns a thin progress bar into something a person can scan at
+ *  a glance and see exactly how far through the intake they are. */
+const STEP_ICONS = [Tags, Clock, MapPin, UserSearch, Coins, FileText, Users, CheckCircle2];
 
 interface FIRWizardProps {
   caseId?: string;
@@ -100,6 +117,12 @@ export function FIRWizard({ caseId }: FIRWizardProps) {
     setStepIndex((s) => Math.max(0, s - 1));
   }
 
+  function goToStep(index: number) {
+    // Only allow jumping to a step already reached — this is a guided
+    // intake, not a form the user should be able to skip ahead in.
+    if (index <= stepIndex) setStepIndex(index);
+  }
+
   const onSubmit = handleSubmit(async (values) => {
     setSubmitting(true);
     try {
@@ -138,81 +161,135 @@ export function FIRWizard({ caseId }: FIRWizardProps) {
 
   return (
     <FormProvider {...methods}>
-      <Card className="border border-slate-200 dark:border-white/10 bg-white dark:bg-slate-900/80 shadow-sm transition-colors duration-200">
-        <CardContent className="space-y-6 p-6">
-          
-          {/* Top Progress & Header */}
-          <div className="space-y-2 border-b border-slate-100 dark:border-white/10 pb-4">
-            <div className="flex items-center justify-between text-xs font-semibold text-slate-700 dark:text-slate-300">
-              <span>
-                Step {stepIndex + 1} of {STEP_COMPONENTS.length} — {WIZARD_STEP_LABELS[WIZARD_STEP_KEYS[stepIndex]]}
-              </span>
-              <div className="flex items-center gap-2">
-                {saving && <span className="text-xs text-slate-400 dark:text-slate-500 font-normal">Saving…</span>}
-                <span className="text-slate-500 dark:text-slate-400">
-                  {Math.round(((stepIndex + 1) / STEP_COMPONENTS.length) * 100)}%
-                </span>
+      {/* Icon stepper — one glance shows exactly where you are and how
+          much is left, rather than a bare percentage. */}
+      <div className="mb-5 overflow-x-auto pb-1">
+        <div className="flex min-w-max items-center gap-1">
+          {WIZARD_STEP_KEYS.map((key, i) => {
+            const Icon = STEP_ICONS[i];
+            const done = i < stepIndex;
+            const active = i === stepIndex;
+            const reachable = i <= stepIndex;
+            return (
+              <div key={key} className="flex items-center">
+                <button
+                  type="button"
+                  onClick={() => goToStep(i)}
+                  disabled={!reachable}
+                  title={WIZARD_STEP_LABELS[key]}
+                  className={
+                    "flex h-9 w-9 shrink-0 items-center justify-center rounded-full border-2 text-xs font-bold transition-all " +
+                    (done
+                      ? "border-emerald-500 bg-emerald-500 text-white"
+                      : active
+                        ? "border-brandBlue bg-brandBlue text-white shadow-md shadow-brandBlue/25"
+                        : "border-borderCustom bg-card text-textSecondary") +
+                    (reachable && !active ? " cursor-pointer hover:border-brandBlue/50" : "")
+                  }
+                >
+                  {done ? <Check className="h-4 w-4" /> : <Icon className="h-4 w-4" />}
+                </button>
+                {i < WIZARD_STEP_KEYS.length - 1 && (
+                  <div
+                    className={
+                      "h-0.5 w-6 shrink-0 transition-colors sm:w-10 " +
+                      (i < stepIndex ? "bg-emerald-500" : "bg-borderCustom")
+                    }
+                  />
+                )}
               </div>
-            </div>
+            );
+          })}
+        </div>
+      </div>
 
-            {/* Progress Bar Container */}
-            <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
-              <div
-                className="h-full bg-blue-600 dark:bg-blue-500 transition-all duration-300 ease-in-out"
-                style={{ width: `${((stepIndex + 1) / STEP_COMPONENTS.length) * 100}%` }}
-              />
+      <div className="rounded-2xl border border-borderCustom bg-card shadow-sm">
+        <div className="space-y-6 p-5 sm:p-7">
+          {/* Header */}
+          <div className="flex items-center justify-between border-b border-borderCustom pb-4">
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-widest text-brandBlue">
+                Step {stepIndex + 1} of {STEP_COMPONENTS.length}
+              </p>
+              <h2 className="mt-0.5 text-base font-semibold text-textPrimary">
+                {WIZARD_STEP_LABELS[WIZARD_STEP_KEYS[stepIndex]]}
+              </h2>
             </div>
+            {saving && (
+              <span className="flex items-center gap-1.5 text-[11px] text-textSecondary">
+                <Sparkles className="h-3 w-3 animate-pulse" />
+                Saving…
+              </span>
+            )}
           </div>
 
           {/* Active Step Component */}
-          <div className="py-2">
+          <div key={stepIndex} className="fir-step-enter">
             <StepComponent />
           </div>
 
           {/* Completeness Indicator */}
-          <div className="flex items-center justify-between border-t border-slate-100 dark:border-white/10 pt-4 text-xs text-slate-500 dark:text-slate-400">
-            <span>
-              Completeness so far:{" "}
-              <strong className="font-semibold text-slate-900 dark:text-slate-100">{liveCompleteness.score}%</strong>
-            </span>
+          <div className="flex items-center gap-3 rounded-xl border border-borderCustom bg-canvas px-3.5 py-2.5">
+            <span className="text-[11px] font-medium text-textSecondary">Draft completeness</span>
+            <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-borderCustom">
+              <div
+                className="h-full rounded-full bg-brandBlue transition-all duration-500"
+                style={{ width: `${liveCompleteness.score}%` }}
+              />
+            </div>
+            <span className="text-xs font-bold text-textPrimary">{liveCompleteness.score}%</span>
           </div>
 
           {/* Form Actions */}
-          <div className="flex items-center justify-between pt-2">
-            <Button 
+          <div className="flex items-center justify-between pt-1">
+            <button
               type="button"
-              variant="outline" 
-              onClick={goBack} 
+              onClick={goBack}
               disabled={stepIndex === 0}
-              className="border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 dark:hover:text-white"
+              className="flex items-center gap-1.5 rounded-xl border border-borderCustom px-4 py-2.5 text-sm font-medium text-textPrimary transition-colors hover:bg-canvas disabled:pointer-events-none disabled:opacity-40"
             >
+              <ArrowLeft className="h-4 w-4" />
               Back
-            </Button>
-            
+            </button>
+
             {isLast ? (
-              <Button 
+              <button
                 type="button"
-                variant="default"
-                onClick={onSubmit} 
+                onClick={onSubmit}
                 disabled={submitting}
-                className="bg-blue-600 dark:bg-blue-500 text-white hover:bg-blue-700 dark:hover:bg-blue-600 shadow-sm transition-colors"
+                className="flex items-center gap-2 rounded-xl bg-brandBlue px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition-opacity hover:opacity-90 disabled:opacity-60"
               >
-                {submitting ? "Generating..." : "Generate FIR Draft"}
-              </Button>
+                {submitting ? "Generating…" : "Generate FIR draft"}
+              </button>
             ) : (
-              <Button 
+              <button
                 type="button"
-                variant="default"
                 onClick={goNext}
-                className="bg-blue-600 dark:bg-blue-500 text-white hover:bg-blue-700 dark:hover:bg-blue-600 shadow-sm transition-colors"
+                className="flex items-center gap-1.5 rounded-xl bg-brandBlue px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition-opacity hover:opacity-90"
               >
                 Next
-              </Button>
+                <ArrowRight className="h-4 w-4" />
+              </button>
             )}
           </div>
+        </div>
+      </div>
 
-        </CardContent>
-      </Card>
+      <style jsx global>{`
+        @keyframes fir-step-in {
+          from {
+            opacity: 0;
+            transform: translateY(6px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
+        }
+        .fir-step-enter {
+          animation: fir-step-in 0.22s ease-out;
+        }
+      `}</style>
     </FormProvider>
   );
 }

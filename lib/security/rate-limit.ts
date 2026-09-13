@@ -21,9 +21,20 @@ export const RATE_LIMITS: Record<string, RateLimitConfig> = {
   chat: { windowMs: 60 * 1000, max: 20 },
   aiGeneration: { windowMs: 60 * 1000, max: 15 },
   voiceTranscription: { windowMs: 60 * 1000, max: 10 },
+  // Voice mode fires one request per spoken clause/sentence in each
+  // direction, so a single normal conversation legitimately makes
+  // far more calls than the one-shot dictation button does.
+  // Raised from 150 to 200 because clause-level TTS splitting
+  // generates more, smaller requests per answer.
+  voiceRealtime: { windowMs: 60 * 1000, max: 200 },
   documentUpload: { windowMs: 60 * 60 * 1000, max: 20 },
   firGeneration: { windowMs: 60 * 60 * 1000, max: 15 },
   apiDefault: { windowMs: 60 * 1000, max: 60 },
+  // OTP: tight enough that a script cannot spray codes or spam a
+  // stranger's inbox, loose enough that a real user who mistypes a
+  // code a couple of times is never locked out of their own signup.
+  otpSend: { windowMs: 15 * 60 * 1000, max: 4 },
+  otpVerify: { windowMs: 15 * 60 * 1000, max: 10 },
 };
 
 const memoryStore = new Map<string, { count: number; resetAt: number }>();

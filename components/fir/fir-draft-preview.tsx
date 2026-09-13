@@ -1,9 +1,6 @@
 "use client";
 
-import { Card, CardContent } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { CheckCircle2, AlertTriangle, Download } from "lucide-react";
+import { CheckCircle2, AlertTriangle, Download, FileSignature, ShieldAlert } from "lucide-react";
 import { CompletenessMeter } from "./completeness-meter";
 import { StatuteBadges } from "./statute-badges";
 import { JurisdictionNotice } from "./jurisdiction-notice";
@@ -24,68 +21,100 @@ export function FirDraftPreview({
   applicantName?: string;
 }) {
   return (
-    <Card>
-      <CardContent className="space-y-4 p-6">
-        <Badge variant="warning">Draft / Assistance Document</Badge>
-        <h2 className="text-lg font-semibold text-navy-900">FIR Draft Summary</h2>
+    <div className="space-y-5">
+      <div className="flex items-start gap-3 rounded-2xl border border-emerald-500/30 bg-emerald-500/5 p-4">
+        <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600 dark:text-emerald-400" />
+        <div>
+          <p className="text-sm font-semibold text-textPrimary">Your draft is ready</p>
+          <p className="mt-0.5 text-xs leading-relaxed text-textSecondary">
+            Review every detail below, then download it as a PDF to take with
+            you.
+          </p>
+        </div>
+      </div>
 
-        <CompletenessMeter result={completeness} />
+      <CompletenessMeter result={completeness} />
 
-        {completeness.missingFields.length > 0 ? (
-          <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-            <div>
-              <p className="font-medium">Consider adding:</p>
-              <ul className="mt-1 list-disc pl-4">
-                {completeness.missingFields.map((f) => (
-                  <li key={f}>{f}</li>
-                ))}
-              </ul>
-            </div>
+      {completeness.missingFields.length > 0 ? (
+        <div className="flex items-start gap-2.5 rounded-xl border border-amber-500/30 bg-amber-500/5 p-3.5 text-sm">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+          <div>
+            <p className="font-medium text-textPrimary">Consider adding:</p>
+            <ul className="mt-1 list-disc space-y-0.5 pl-4 text-xs text-textSecondary">
+              {completeness.missingFields.map((f) => (
+                <li key={f}>{f}</li>
+              ))}
+            </ul>
           </div>
-        ) : (
-          <div className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
-            <CheckCircle2 className="h-4 w-4" />
-            All key fields are complete.
-          </div>
-        )}
+        </div>
+      ) : (
+        <div className="flex items-center gap-2.5 rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-3.5 text-sm text-textPrimary">
+          <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+          All key fields are complete.
+        </div>
+      )}
 
-        <StatuteBadges incidentType={data.incidentType} narrative={data.narrative} />
+      <StatuteBadges incidentType={data.incidentType} narrative={data.narrative} />
 
-        <JurisdictionNotice data={data} />
+      <JurisdictionNotice data={data} />
 
-        <div className="rounded-xl border border-slate-200 p-4 text-sm text-slate-600">
-          <p className="mb-2 font-medium text-navy-900">Draft contents</p>
-          {data.narrative && <p className="mb-1"><span className="font-medium">Narrative: </span>{data.narrative}</p>}
+      {/* Document-styled preview: a paper-like card so this reads as
+          the actual complaint, not another form summary. */}
+      <div className="overflow-hidden rounded-2xl border border-borderCustom shadow-sm">
+        <div className="flex items-center gap-2 border-b border-borderCustom bg-canvas px-5 py-3">
+          <FileSignature className="h-4 w-4 text-brandBlue" />
+          <span className="text-xs font-bold uppercase tracking-wide text-textSecondary">
+            Draft contents
+          </span>
+        </div>
+        <div className="space-y-3 bg-card p-5 text-sm leading-relaxed text-textPrimary">
+          {data.narrative && (
+            <p>
+              <span className="font-semibold">Narrative: </span>
+              <span data-no-translate>{data.narrative}</span>
+            </p>
+          )}
           {data.address && (
-            <p className="mb-1">
-              <span className="font-medium">Location: </span>
-              {[data.address, data.landmark, data.district, data.state, data.pincode].filter(Boolean).join(", ")}
+            <p>
+              <span className="font-semibold">Location: </span>
+              <span data-no-translate>
+                {[data.address, data.landmark, data.district, data.state, data.pincode].filter(Boolean).join(", ")}
+              </span>
             </p>
           )}
           {(data.accusedName || data.accusedUnknown) && (
-            <p className="mb-1">
-              <span className="font-medium">Accused: </span>
-              {data.accusedUnknown ? "Unknown" : [data.accusedName, data.accusedDescription].filter(Boolean).join(" — ")}
+            <p>
+              <span className="font-semibold">Accused: </span>
+              <span data-no-translate>
+                {data.accusedUnknown ? "Unknown" : [data.accusedName, data.accusedDescription].filter(Boolean).join(" — ")}
+              </span>
             </p>
           )}
+          {!data.narrative && !data.address && !data.accusedName && !data.accusedUnknown && (
+            <p className="text-textSecondary">No details recorded yet.</p>
+          )}
         </div>
+      </div>
 
-        <Button variant="brand" onClick={() => downloadFirPdf(data, applicantName)}>
-          <Download className="mr-1.5 h-4 w-4" />
-          Download PDF draft
-        </Button>
+      <button
+        type="button"
+        onClick={() => downloadFirPdf(data, applicantName)}
+        className="flex w-full items-center justify-center gap-2 rounded-xl bg-brandBlue px-5 py-3.5 text-sm font-semibold text-white shadow-sm transition-opacity hover:opacity-90 sm:w-auto"
+      >
+        <Download className="h-4 w-4" />
+        Download PDF draft
+      </button>
 
-        <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
-          ⚠️ {BNSS_NOTICE}
-        </div>
+      <div className="flex items-start gap-2.5 rounded-xl border border-amber-500/30 bg-amber-500/5 p-3.5">
+        <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+        <p className="text-xs leading-relaxed text-textPrimary">{BNSS_NOTICE}</p>
+      </div>
 
-        <p className="text-xs text-slate-400">
-          This is a draft assistance document, not an officially filed FIR.
-          Please review it with the appropriate police station or legal aid
-          service before submission.
-        </p>
-      </CardContent>
-    </Card>
+      <p className="text-xs leading-relaxed text-textSecondary">
+        This is a draft assistance document, not an officially filed FIR.
+        Please review it with the appropriate police station or legal aid
+        service before submission.
+      </p>
+    </div>
   );
 }

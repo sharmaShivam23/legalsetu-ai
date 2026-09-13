@@ -7,6 +7,9 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     globals: true,
+    // tests/e2e/* are Playwright specs — they import @playwright/test,
+    // which cannot run under vitest. `npm run test:e2e` runs those.
+    exclude: ["node_modules/**", "tests/e2e/**"],
   },
   resolve: {
     alias: { "@": path.resolve(__dirname, ".") },

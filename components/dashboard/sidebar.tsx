@@ -15,7 +15,6 @@ import {
   Users,
   History,
   Settings,
-  Globe,
   Menu,
   X,
   Sparkles,
@@ -26,7 +25,7 @@ import {
   ChevronRight
 } from "lucide-react";
 import { cn } from "@/lib/utils/cn";
-import { SUPPORTED_LANGUAGES } from "@/lib/translation/languages";
+import { LanguageSwitcher } from "@/components/i18n/LanguageSwitcher";
 import { ThemeToggle } from "@/components/common/ThemeToggle";
 
 const NAV_ITEMS = [
@@ -116,8 +115,12 @@ export function Sidebar() {
             <div className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-blue-600 text-white shadow-md shadow-blue-500/20">
               <Scale className="h-4 w-4 relative z-10" />
             </div>
+            {/* Brand name — never translated (see landing page note). */}
             {!isCollapsed && (
-              <span className="font-serif text-xl font-bold tracking-wide text-textPrimary whitespace-nowrap">
+              <span
+                data-no-translate
+                className="font-serif text-xl font-bold tracking-wide text-textPrimary whitespace-nowrap"
+              >
                 Legal<span className="text-brandBlue">Setu</span>
               </span>
             )}
@@ -196,26 +199,12 @@ export function Sidebar() {
             <ThemeToggle />
           </div>
 
-          {!isCollapsed && (
-            <div className="flex items-center gap-2 rounded-xl border border-borderCustom bg-card px-3 py-2 text-sm text-textPrimary shadow-sm hover:border-brandBlue/30 transition-colors">
-              <Globe className="h-4 w-4 text-brandBlue shrink-0" />
-              <select
-                className="w-full cursor-pointer bg-transparent outline-none appearance-none font-medium text-textPrimary"
-                defaultValue="en"
-                aria-label="Interface language"
-              >
-                {SUPPORTED_LANGUAGES.map((l) => (
-                  <option key={l.code} value={l.code} className="bg-card text-textPrimary">
-                    {l.nativeName}
-                  </option>
-                ))}
-              </select>
-              <div className="pointer-events-none flex items-center">
-                <svg className="h-3 w-3 text-textSecondary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                </svg>
-              </div>
-            </div>
+          {/* Language switcher — one choice re-renders the whole app:
+              interface, backend data, AI answers and voice. */}
+          {!isCollapsed ? (
+            <LanguageSwitcher variant="sidebar" />
+          ) : (
+            <LanguageSwitcher variant="compact" className="mx-auto" />
           )}
 
           {/* User Profile & Logout Section */}

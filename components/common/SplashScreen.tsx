@@ -7,11 +7,12 @@ export default function SplashScreen() {
   const [isVisible, setIsVisible] = useState(true);
 
   useEffect(() => {
-    // Unmount entirely from the DOM at 4.5s, 
-    // strictly AFTER the CSS animation has already hidden it.
+    // Unmounts at 1.5s, strictly after the 1.3s CSS fade has finished.
+    // It used to sit here for 4.5 seconds, which read as the site being
+    // frozen — a splash is a brand beat, not a loading screen.
     const removeTimer = setTimeout(() => {
       setIsVisible(false);
-    }, 4500);
+    }, 1500);
 
     return () => clearTimeout(removeTimer);
   }, []);
@@ -24,13 +25,13 @@ export default function SplashScreen() {
       <style dangerouslySetInnerHTML={{ __html: `
         /* 1. CSS Fade-Out Guarantee */
         .splash-wrapper {
-          animation: fadeOutSplash 4s ease-in-out forwards;
+          animation: fadeOutSplash 1.3s ease-in-out forwards;
         }
-        
+
         @keyframes fadeOutSplash {
           0% { opacity: 1; visibility: visible; }
-          80% { opacity: 1; visibility: visible; } /* Stays solid for 3.2s */
-          100% { opacity: 0; visibility: hidden; pointer-events: none; } /* Fades away by 4s */
+          55% { opacity: 1; visibility: visible; }
+          100% { opacity: 0; visibility: hidden; pointer-events: none; }
         }
 
         /* 2. 3D Scene Setup */
@@ -47,7 +48,7 @@ export default function SplashScreen() {
           0% { width: 0%; left: 0; }
           100% { width: 100%; left: 0; }
         }
-        .splash-progress { animation: progress-fill 3.3s cubic-bezier(0.76, 0, 0.24, 1) forwards; }
+        .splash-progress { animation: progress-fill 1.1s cubic-bezier(0.76, 0, 0.24, 1) forwards; }
         
         /* Text Shimmer */
         @keyframes text-shimmer {

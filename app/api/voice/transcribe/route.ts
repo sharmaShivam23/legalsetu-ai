@@ -3,6 +3,7 @@ import { auth } from "@/lib/auth/auth";
 import { apiError, apiSuccess } from "@/lib/utils/api-response";
 import { transcribeAudio } from "@/lib/voice/stt";
 import { checkRateLimit } from "@/lib/security/rate-limit";
+import { normalizeLanguage } from "@/lib/i18n/languages";
 
 export async function POST(req: NextRequest) {
   const session = await auth();
@@ -21,8 +22,13 @@ export async function POST(req: NextRequest) {
     return apiError("FILE_TOO_LARGE", "Audio exceeds 15MB limit.", 413);
   }
 
+  // Which language the user is speaking — falls back to English.
+  const language = normalizeLanguage(
+    (formData?.get("language") as string | null) ?? undefined
+  );
+
   const buffer = Buffer.from(await file.arrayBuffer());
-  const result = await transcribeAudio(buffer, file.type);
+  const result = await transcribeAudio(buffer, file.type, language);
 
   return apiSuccess(result);
 }

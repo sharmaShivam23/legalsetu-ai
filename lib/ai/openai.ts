@@ -14,6 +14,8 @@
  */
 
 import OpenAI from "openai";
+import { withKeyRotation } from "./key-pool";
+import { getModelById } from "./models";
 import type {
   AIProvider,
   EmbeddingResult,
@@ -25,42 +27,52 @@ import type {
 } from "./provider";
 
 export class OpenAIProvider implements AIProvider {
-  name = "openai";
+  name: string;
   isDemo = false;
-  private client: OpenAI;
   private chatModel: string;
   private embeddingModel: string;
+  private baseURL?: string;
+  private keyPrefix: string;
 
-  constructor() {
-    if (!process.env.OPENAI_API_KEY) {
-      throw new Error("OPENAI_API_KEY is not set");
-    }
-    this.client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-    this.chatModel = process.env.OPENAI_CHAT_MODEL ?? "gpt-4o-mini";
-    this.embeddingModel =
-      process.env.OPENAI_EMBEDDING_MODEL ?? "text-embedding-3-small";
+  constructor(modelId?: string, providerName = "openai", baseURL?: string, keyPrefix = "OPENAI_API_KEY") {
+    this.name = providerName;
+    this.baseURL = baseURL;
+    this.keyPrefix = keyPrefix;
+    
+    const model = getModelById(modelId);
+    // Use the model registry for chat model, but keep openai specific env fallback for embeddings
+    this.chatModel = model.provider === providerName ? model.getApiId() : (process.env.OPENAI_CHAT_MODEL ?? "gpt-4o-mini");
+    this.embeddingModel = process.env.OPENAI_EMBEDDING_MODEL ?? "text-embedding-3-small";
+  }
+
+  private getClient(apiKey: string) {
+    return new OpenAI({ apiKey, baseURL: this.baseURL });
   }
 
   async complete(options: LLMCompletionOptions): Promise<string> {
-    const res = await this.client.chat.completions.create({
-      model: this.chatModel,
-      messages: options.messages,
-      temperature: options.temperature ?? 0.2,
-      max_tokens: options.maxTokens ?? 1000,
-    });
+    const res = await withKeyRotation(this.keyPrefix, (apiKey) =>
+      this.getClient(apiKey).chat.completions.create({
+        model: this.chatModel,
+        messages: options.messages,
+        temperature: options.temperature ?? 0.2,
+        max_tokens: options.maxTokens ?? 1000,
+      })
+    );
     return res.choices[0]?.message?.content ?? "";
   }
 
   async *streamComplete(
     options: LLMCompletionOptions
   ): AsyncGenerator<LLMStreamChunk> {
-    const stream = await this.client.chat.completions.create({
-      model: this.chatModel,
-      messages: options.messages,
-      temperature: options.temperature ?? 0.2,
-      max_tokens: options.maxTokens ?? 1000,
-      stream: true,
-    });
+    const stream = await withKeyRotation(this.keyPrefix, (apiKey) => 
+      this.getClient(apiKey).chat.completions.create({
+        model: this.chatModel,
+        messages: options.messages,
+        temperature: options.temperature ?? 0.2,
+        max_tokens: options.maxTokens ?? 1000,
+        stream: true,
+      })
+    );
 
     for await (const chunk of stream) {
       const delta = chunk.choices[0]?.delta?.content ?? "";
@@ -70,19 +82,23 @@ export class OpenAIProvider implements AIProvider {
   }
 
   async embed(text: string): Promise<EmbeddingResult> {
-    const res = await this.client.embeddings.create({
-      model: this.embeddingModel,
-      input: text,
-    });
+    const res = await withKeyRotation(this.keyPrefix, (apiKey) => 
+      this.getClient(apiKey).embeddings.create({
+        model: this.embeddingModel,
+        input: text,
+      })
+    );
     const embedding = res.data[0].embedding;
     return { embedding, dimensions: embedding.length };
   }
 
   async embedBatch(texts: string[]): Promise<EmbeddingResult[]> {
-    const res = await this.client.embeddings.create({
-      model: this.embeddingModel,
-      input: texts,
-    });
+    const res = await withKeyRotation(this.keyPrefix, (apiKey) => 
+      this.getClient(apiKey).embeddings.create({
+        model: this.embeddingModel,
+        input: texts,
+      })
+    );
     return res.data.map((d) => ({ embedding: d.embedding, dimensions: d.embedding.length }));
   }
 
@@ -91,10 +107,12 @@ export class OpenAIProvider implements AIProvider {
     mimeType: string
   ): Promise<TranscriptionResult> {
     const file = new File([audio], "audio.webm", { type: mimeType });
-    const res = await this.client.audio.transcriptions.create({
-      file,
-      model: "whisper-1",
-    });
+    const res = await withKeyRotation(this.keyPrefix, (apiKey) => 
+      this.getClient(apiKey).audio.transcriptions.create({
+        file,
+        model: "whisper-1",
+      })
+    );
     return { text: res.text };
   }
 
@@ -122,24 +140,25 @@ export class OpenAIProvider implements AIProvider {
 
   async ocr(image: Buffer, mimeType: string): Promise<OCRResult> {
     const base64 = image.toString("base64");
-    const res = await this.client.chat.completions.create({
-      model: this.chatModel,
-      messages: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: "Extract all text from this document image exactly as written. Return only the extracted text.",
-            },
-            {
-              type: "image_url",
+    const res = await withKeyRotation(this.keyPrefix, (apiKey) => 
+      this.getClient(apiKey).chat.completions.create({
+        model: this.chatModel,
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: "Extract all text from this document image exactly as written. Return only the extracted text.",
+              },
+              {
+                type: "image_url",
               image_url: { url: `data:${mimeType};base64,${base64}` },
             },
           ],
         },
       ],
-    });
+    }));
     return { text: res.choices[0]?.message?.content ?? "" };
   }
 }

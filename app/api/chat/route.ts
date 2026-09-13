@@ -40,7 +40,8 @@ export async function POST(req: NextRequest) {
     const { chunks, evidenceLevel } = await retrieveRelevantChunks(content);
     const retrievalLatencyMs = Date.now() - retrievalStart;
 
-    const messages = buildRAGMessages(content, chunks);
+    // The model writes the answer directly in the user's language.
+    const messages = buildRAGMessages(content, chunks, [], language);
 
     const aiStart = Date.now();
     const answer = await generateCompletion(messages, { temperature: 0.2 });
