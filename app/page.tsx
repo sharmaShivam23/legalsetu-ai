@@ -228,7 +228,7 @@ export default function LandingPage() {
             </div>
 
             <nav className="hidden items-center gap-8 text-sm font-medium text-slate-600 md:flex dark:text-slate-300" aria-label="Main Navigation">
-              <a href="#what-is-this" className="transition-colors hover:text-slate-900 dark:hover:text-white">What is this?</a>
+              <a href="#what-is-this" className="transition-colors hover:text-slate-900 dark:hover:text-white">About</a>
               <a href="#how-it-works" className="transition-colors hover:text-slate-900 dark:hover:text-white">How it works</a>
               <a href="#features" className="transition-colors hover:text-slate-900 dark:hover:text-white">Features</a>
               <a href="#trust" className="transition-colors hover:text-slate-900 dark:hover:text-white">Trust &amp; Sources</a>
@@ -503,7 +503,7 @@ export default function LandingPage() {
                 <h3 className="text-xs font-bold uppercase tracking-widest text-slate-500">Explore</h3>
                 <ul className="mt-4 space-y-2.5 text-sm">
                   {[
-                    { href: "#what-is-this", label: "What is this?" },
+                    { href: "#About", label: "About" },
                     { href: "#how-it-works", label: "How it works" },
                     { href: "#features", label: "Features" },
                     { href: "#trust", label: "Trust & Sources" },

@@ -5,17 +5,17 @@
 
 */
 -- DropForeignKey
-ALTER TABLE "LegalDocument" DROP CONSTRAINT "LegalDocument_userId_fkey";
+ALTER TABLE "LegalDocument" DROP CONSTRAINT IF EXISTS "LegalDocument_userId_fkey";
 
 -- AlterTable
-ALTER TABLE "Message" ADD COLUMN     "kind" TEXT,
-ADD COLUMN     "mode" TEXT;
+ALTER TABLE "Message" ADD COLUMN IF NOT EXISTS "kind" TEXT,
+ADD COLUMN IF NOT EXISTS "mode" TEXT;
 
 -- DropTable
-DROP TABLE "LegalDocument";
+DROP TABLE IF EXISTS "LegalDocument";
 
 -- DropEnum
-DROP TYPE "AnalysisStatus";
+DROP TYPE IF EXISTS "AnalysisStatus";
 
 -- DropEnum
-DROP TYPE "LegalDocumentCategory";
+DROP TYPE IF EXISTS "LegalDocumentCategory";

@@ -5,7 +5,7 @@
   "description": "AI-Powered Multilingual Legal Assistance Platform for India",
   "scripts": {
     "dev": "next dev",
-    "build": "prisma generate && prisma migrate deploy && next build",
+    "build": "prisma generate && prisma migrate resolve --rolled-back 20260906171330_add_message_mode_kind && prisma migrate deploy && next build",
     "postinstall": "prisma generate",
     "start": "next start",
     "lint": "eslint .",
