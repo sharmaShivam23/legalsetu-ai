@@ -5,7 +5,7 @@
 
 */
 -- DropForeignKey
-ALTER TABLE "LegalDocument" DROP CONSTRAINT IF EXISTS "LegalDocument_userId_fkey";
+ALTER TABLE IF EXISTS "LegalDocument" DROP CONSTRAINT IF EXISTS "LegalDocument_userId_fkey";
 
 -- AlterTable
 ALTER TABLE "Message" ADD COLUMN IF NOT EXISTS "kind" TEXT,
