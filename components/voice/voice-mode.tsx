@@ -1,31 +1,28 @@
 "use client";
 
 // ==========================================================
-// LegalSetu — full-screen voice mode
+// LegalSetu — Real-Time Bidirectional Voice Mode (ChatGPT-Style)
 // ----------------------------------------------------------
-// Talk instead of type. The loop is:
+// Real-time continuous conversational loop:
+//   User speaks -> instant speech recognition / VAD detection
+//     -> streams through /api/chat/stream
+//     -> sentences synthesised and spoken aloud immediately
+//     -> auto-transitions back to listening for the next question.
 //
-//   mic -> voice-activity detection -> Sarvam STT
-//       -> the SAME /api/chat/stream pipeline the typed chat uses
-//       -> sentences piped to Sarvam Bulbul as they finish
-//       -> played back to back while the answer is still generating
-//
-// Two things make it feel live rather than walkie-talkie:
-//   * the answer is spoken sentence by sentence, so audio starts
-//     within a sentence of generation rather than after the whole
-//     reply is written;
-//   * the microphone keeps listening while the assistant talks, so
-//     speaking over it cuts the audio instantly and starts a new
-//     question (barge-in).
-//
-// Every Sarvam call goes through /api/voice/*, so the subscription
-// key stays on the server. Nothing here knows it exists.
+// Dual-engine speech architecture:
+//   - Input: Native browser Web Speech API (zero latency, real-time)
+//            with fallback to MediaRecorder + Sarvam STT.
+//   - Output: Sarvam Bulbul TTS with instant fallback to
+//             Browser Web Speech Synthesis (never fails silently).
+//   - Pre-unlocked audio to prevent browser autoplay blocks.
+//   - Smart echo protection preventing assistant self-interruption.
 // ==========================================================
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Mic, MicOff, X, Loader2, AudioLines, AlertTriangle, Volume2 } from "lucide-react";
 import type { ChatMode } from "@/lib/rag/prompt";
-import { extractClauses, extractSentences, toSpeakable } from "@/lib/voice/speech-text";
+import { extractClauses, toSpeakable } from "@/lib/voice/speech-text";
+import { speechCodeFor } from "@/lib/i18n/languages";
 
 type Phase = "starting" | "listening" | "transcribing" | "thinking" | "speaking" | "error";
 
@@ -45,23 +42,16 @@ interface VoiceModeProps {
 /** RMS above this counts as speech while the assistant is quiet. */
 const SPEECH_THRESHOLD = 0.035;
 /**
- * Higher bar while audio is playing. Echo cancellation removes most of
- * the assistant's own voice, but not all of it on every device, and a
- * false barge-in mid-answer is worse than a slightly firmer interruption.
- * Lowered from 0.1 to 0.08 for easier, more natural interruption.
+ * Higher bar while audio is playing. Only intentional loud speech directly
+ * into the microphone triggers barge-in to avoid speaker acoustic feedback.
  */
-const BARGE_THRESHOLD = 0.08;
-/**
- * Silence this long after speech ends the utterance. Every millisecond
- * here is dead air the user waits through before anything starts, so it
- * is kept just long enough to ride out a pause mid-sentence.
- * Reduced from 650ms to 400ms — ChatGPT-class responsiveness.
- */
-const SILENCE_MS = 400;
-/** Restart the recorder after this much unbroken silence, to keep blobs small. */
+const BARGE_THRESHOLD = 0.22;
+/** Silence duration after speech ends to finalize the utterance. */
+const SILENCE_MS = 600;
+/** Restart recorder interval to keep audio chunks manageable. */
 const IDLE_RESET_MS = 8_000;
-/** Ignore blips shorter than this so a cough is not a question. */
-const MIN_SPEECH_MS = 200;
+/** Ignore audio blips shorter than this (e.g. clicks, coughs). */
+const MIN_SPEECH_MS = 300;
 
 function pickMimeType(): string {
   const candidates = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg;codecs=opus"];
@@ -106,11 +96,17 @@ export function VoiceMode({
   const mutedRef = useRef(false);
   const phaseRef = useRef<Phase>("starting");
   const closingRef = useRef(false);
+  const speakingStartedAtRef = useRef(0);
+
+  // --- speech recognition (Web Speech API) ---
+  const recognitionRef = useRef<any>(null);
+  const speechSupportedRef = useRef(false);
+  const accumulatedTranscriptRef = useRef("");
+  const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // --- speech output (dual audio ping-pong for gapless playback) ---
   const audioElARef = useRef<HTMLAudioElement | null>(null);
   const audioElBRef = useRef<HTMLAudioElement | null>(null);
-  /** Which audio element is currently active: 0 = A, 1 = B. */
   const audioIdxRef = useRef(0);
   const ttsQueueRef = useRef<string[]>([]);
   const pumpingRef = useRef(false);
@@ -132,7 +128,81 @@ export function VoiceMode({
   mutedRef.current = muted;
 
   // ---------------------------------------------------------------
-  // Speech output
+  // Browser Audio Unlocking (Fix Chrome/Edge Autoplay Blocks)
+  // ---------------------------------------------------------------
+  const unlockAudioPlayback = useCallback(() => {
+    try {
+      if (audioCtxRef.current && audioCtxRef.current.state === "suspended") {
+        void audioCtxRef.current.resume();
+      }
+      const silentWav = "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA";
+      for (const el of [audioElARef.current, audioElBRef.current]) {
+        if (el) {
+          el.src = silentWav;
+          el.play().catch(() => {});
+        }
+      }
+      if (typeof window !== "undefined" && "speechSynthesis" in window) {
+        window.speechSynthesis.resume();
+      }
+    } catch {
+      // Non-fatal
+    }
+  }, []);
+
+  // ---------------------------------------------------------------
+  // Speech output: Browser Speech Synthesis Fallback
+  // ---------------------------------------------------------------
+  const browserSpeak = useCallback(
+    (text: string): Promise<void> => {
+      return new Promise((resolve) => {
+        if (typeof window === "undefined" || !("speechSynthesis" in window)) {
+          return resolve();
+        }
+        const trimmed = text.trim();
+        if (!trimmed) return resolve();
+
+        try {
+          window.speechSynthesis.cancel();
+          const utterance = new SpeechSynthesisUtterance(trimmed);
+          const speechLang = speechCodeFor(language);
+          utterance.lang = speechLang;
+
+          const voices = window.speechSynthesis.getVoices();
+          const base = speechLang.split("-")[0];
+          utterance.voice =
+            voices.find((v) => v.lang === speechLang) ??
+            voices.find((v) => v.lang?.startsWith(base)) ??
+            null;
+
+          utterance.rate = 1.05;
+          utterance.pitch = 1.0;
+
+          let finished = false;
+          const done = () => {
+            if (!finished) {
+              finished = true;
+              resolve();
+            }
+          };
+
+          utterance.onend = done;
+          utterance.onerror = done;
+
+          // Safety timeout in case browser TTS stalls
+          setTimeout(done, Math.max(1500, trimmed.length * 100));
+
+          window.speechSynthesis.speak(utterance);
+        } catch {
+          resolve();
+        }
+      });
+    },
+    [language]
+  );
+
+  // ---------------------------------------------------------------
+  // Speech output: Sarvam Cloud TTS (with timeout)
   // ---------------------------------------------------------------
   const releaseUrls = useCallback(() => {
     objectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
@@ -144,6 +214,10 @@ export function VoiceMode({
       if (ttsBlockedRef.current) return null;
       const controller = new AbortController();
       ttsAbortRef.current = controller;
+
+      // 4-second timeout for TTS chunk to avoid lag
+      const timeoutId = setTimeout(() => controller.abort(), 4000);
+
       try {
         const res = await fetch("/api/voice/speak", {
           method: "POST",
@@ -151,23 +225,22 @@ export function VoiceMode({
           signal: controller.signal,
           body: JSON.stringify({ text, language }),
         });
+        clearTimeout(timeoutId);
+
         if (!res.ok) {
           const detail = await res.json().catch(() => null);
           if (detail?.error?.code === "TTS_LANGUAGE_UNSUPPORTED") {
-            // No voice exists for this script. Stop trying for the rest
-            // of the session and let the on-screen transcript carry it.
             ttsBlockedRef.current = true;
-            setNotice(detail.error.message);
-          } else if (res.status === 429) {
-            setNotice("Speech is rate-limited for a moment — the answer is still on screen.");
           }
           return null;
         }
+
         const blob = await res.blob();
         const url = URL.createObjectURL(blob);
         objectUrlsRef.current.push(url);
         return url;
       } catch {
+        clearTimeout(timeoutId);
         return null;
       }
     },
@@ -177,79 +250,73 @@ export function VoiceMode({
   /** Plays a URL on the next audio element in the ping-pong pair. */
   const playUrl = useCallback((url: string) => {
     return new Promise<void>((resolve) => {
-      // Alternate between A and B for gapless playback.
       const el = audioIdxRef.current === 0 ? audioElARef.current : audioElBRef.current;
       audioIdxRef.current = audioIdxRef.current === 0 ? 1 : 0;
       if (!el) return resolve();
+
+      let finished = false;
       const finish = () => {
+        if (finished) return;
+        finished = true;
         el.removeEventListener("ended", finish);
         el.removeEventListener("error", finish);
         resolve();
       };
+
       el.addEventListener("ended", finish);
       el.addEventListener("error", finish);
       el.src = url;
+
       el.play().catch((err) => {
-        console.warn("Audio play failed:", err);
+        console.warn("Audio play failed, proceeding:", err);
         finish();
       });
     });
   }, []);
 
-  /**
-   * Drains the clause/sentence queue with 2-deep lookahead: while the
-   * current clip plays, the next TWO clips are already being synthesised.
-   * Combined with the dual-audio ping-pong, this eliminates perceptible
-   * gaps between spoken phrases entirely.
-   */
+  // ---------------------------------------------------------------
+  // Speech Queue Pump: Gapless Spoken Playback with Fallback
+  // ---------------------------------------------------------------
   const pump = useCallback(async () => {
     if (pumpingRef.current) return;
     pumpingRef.current = true;
 
     try {
-      let ahead1: Promise<string | null> | null = null;
-      let ahead2: Promise<string | null> | null = null;
-
       while (!cancelSpeechRef.current) {
-        // Rotate the lookahead pipeline forward.
-        let urlPromise = ahead1;
-        ahead1 = ahead2;
-        ahead2 = null;
+        const next = ttsQueueRef.current.shift();
+        if (!next) break;
 
-        if (!urlPromise) {
-          const next = ttsQueueRef.current.shift();
-          if (!next) break;
-          urlPromise = synth(next);
+        if (phaseRef.current !== "speaking") {
+          setPhaseSafe("speaking");
+          speakingStartedAtRef.current = performance.now();
         }
 
-        // Fill any empty lookahead slots from the queue.
-        if (!ahead1) {
-          const s1 = ttsQueueRef.current.shift();
-          if (s1) ahead1 = synth(s1);
-        }
-        if (!ahead2) {
-          const s2 = ttsQueueRef.current.shift();
-          if (s2) ahead2 = synth(s2);
+        // Try Sarvam TTS first, fallback immediately to local Web Speech Synthesis
+        let played = false;
+        try {
+          const url = await synth(next);
+          if (url && !cancelSpeechRef.current) {
+            await playUrl(url);
+            played = true;
+          }
+        } catch {
+          played = false;
         }
 
-        const url = await urlPromise;
-        if (cancelSpeechRef.current) break;
-        if (url) {
-          if (phaseRef.current !== "speaking") setPhaseSafe("speaking");
-          await playUrl(url);
+        if (!played && !cancelSpeechRef.current) {
+          await browserSpeak(next);
         }
       }
     } finally {
       pumpingRef.current = false;
-      // Back to listening only once generation has finished too —
-      // otherwise the queue is merely empty for the moment.
+      // When generation is done and speech queue is empty:
+      // AUTOMATICALLY TRANSITION BACK TO LISTENING (ChatGPT loop)!
       if (!cancelSpeechRef.current && streamDoneRef.current && ttsQueueRef.current.length === 0) {
-        if (phaseRef.current === "speaking" || phaseRef.current === "thinking") {
-          setPhaseSafe("listening");
-        }
+        setPhaseSafe("listening");
+        resumeRecognition();
       }
     }
-  }, [playUrl, setPhaseSafe, synth]);
+  }, [browserSpeak, playUrl, setPhaseSafe, synth]);
 
   const enqueueSpeech = useCallback(
     (sentence: string) => {
@@ -265,22 +332,38 @@ export function VoiceMode({
     cancelSpeechRef.current = true;
     ttsQueueRef.current = [];
     ttsAbortRef.current?.abort();
-    // Stop both audio elements in the ping-pong pair.
+
+    if (typeof window !== "undefined" && "speechSynthesis" in window) {
+      try {
+        window.speechSynthesis.cancel();
+      } catch {}
+    }
+
     for (const el of [audioElARef.current, audioElBRef.current]) {
       if (el) {
         el.pause();
         el.removeAttribute("src");
-        el.load();
+        try { el.load(); } catch {}
       }
     }
     releaseUrls();
   }, [releaseUrls]);
 
   // ---------------------------------------------------------------
-  // One turn through the existing chat pipeline
+  // Real-Time Chat Turn Execution
   // ---------------------------------------------------------------
   const runVoiceTurn = useCallback(
     async (question: string) => {
+      const trimmed = question.trim();
+      if (!trimmed) {
+        setPhaseSafe("listening");
+        resumeRecognition();
+        return;
+      }
+
+      // Stop recognition while thinking and speaking
+      pauseRecognition();
+
       setPhaseSafe("thinking");
       setAnswerText("");
       spokenTailRef.current = "";
@@ -297,12 +380,10 @@ export function VoiceMode({
           headers: { "Content-Type": "application/json" },
           signal: controller.signal,
           body: JSON.stringify({
-            content: question,
+            content: trimmed,
             language,
             mode,
             modelId,
-            // Same pipeline and same grounding — just a reply short
-            // enough to listen to.
             voice: true,
             ...(conversationId ? { conversationId } : {}),
           }),
@@ -344,8 +425,7 @@ export function VoiceMode({
               answer += payload.delta ?? "";
               setAnswerText(answer);
 
-              // Speak at clause boundaries (commas, semicolons) not just
-              // sentence ends — gets audio to the speaker ~500ms sooner.
+              // Extract clauses for earliest possible speech output
               const speakable = toSpeakable(answer);
               if (speakable.length > spokenTailRef.current.length) {
                 const fresh = speakable.slice(spokenTailRef.current.length);
@@ -358,21 +438,21 @@ export function VoiceMode({
             } else if (event === "done") {
               newConversationId = payload.conversationId;
             } else if (event === "error") {
-              throw new Error(payload.message ?? "The assistant hit an error.");
+              throw new Error(payload.message ?? "The assistant encountered an error.");
             }
           }
         }
 
-        // Anything left without a closing full stop still gets spoken.
+        // Deliver leftover text
         const finalSpeakable = toSpeakable(answer);
         const leftover = finalSpeakable.slice(spokenTailRef.current.length).trim();
         if (leftover) enqueueSpeech(leftover);
 
-        // Track in conversation history for the mini-transcript.
-        setTurns((prev) => [...prev, { user: question, assistant: answer }]);
-        onTurn(question, answer, newConversationId);
+        // Update transcript history
+        setTurns((prev) => [...prev, { user: trimmed, assistant: answer }]);
+        onTurn(trimmed, answer, newConversationId);
       } catch (err: any) {
-        if (err?.name === "AbortError") return; // barge-in or closing
+        if (err?.name === "AbortError") return;
         setErrorMessage(err?.message ?? "Something went wrong.");
         setPhaseSafe("error");
         return;
@@ -380,19 +460,123 @@ export function VoiceMode({
         streamDoneRef.current = true;
       }
 
-      // If nothing was queued (empty answer, or TTS unavailable) return
-      // to listening rather than sitting on "thinking" forever.
       if (!pumpingRef.current && ttsQueueRef.current.length === 0) {
         setPhaseSafe("listening");
+        resumeRecognition();
       } else {
         void pump();
       }
     },
-    [conversationId, enqueueSpeech, language, mode, onTurn, pump, setPhaseSafe]
+    [conversationId, enqueueSpeech, language, mode, modelId, onTurn, pump, setPhaseSafe]
   );
 
   // ---------------------------------------------------------------
-  // Utterance -> transcript
+  // Web Speech API: Real-Time Instant Recognition
+  // ---------------------------------------------------------------
+  const pauseRecognition = useCallback(() => {
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.abort();
+      } catch {}
+    }
+  }, []);
+
+  const resumeRecognition = useCallback(() => {
+    if (closingRef.current || mutedRef.current) return;
+    if (phaseRef.current === "speaking" || phaseRef.current === "thinking") return;
+
+    if (recognitionRef.current && speechSupportedRef.current) {
+      try {
+        recognitionRef.current.start();
+      } catch {
+        // Already active
+      }
+    }
+  }, []);
+
+  const initWebSpeech = useCallback(() => {
+    if (typeof window === "undefined") return;
+    const SpeechConstructor = (window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition;
+
+    if (!SpeechConstructor) {
+      speechSupportedRef.current = false;
+      return;
+    }
+
+    speechSupportedRef.current = true;
+    const recognition = new SpeechConstructor();
+    recognition.lang = speechCodeFor(language);
+    recognition.continuous = true;
+    recognition.interimResults = true;
+
+    recognition.onresult = (event: any) => {
+      if (mutedRef.current || phaseRef.current === "speaking" || phaseRef.current === "thinking") return;
+
+      let interim = "";
+      let final = "";
+
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const res = event.results[i];
+        if (res.isFinal) final += res[0].transcript;
+        else interim += res[0].transcript;
+      }
+
+      if (final) {
+        accumulatedTranscriptRef.current += (accumulatedTranscriptRef.current ? " " : "") + final.trim();
+        setUserText(accumulatedTranscriptRef.current);
+
+        // Immediate dispatch after final phrase pause
+        if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+        silenceTimerRef.current = setTimeout(() => {
+          const query = accumulatedTranscriptRef.current.trim();
+          accumulatedTranscriptRef.current = "";
+          if (query) {
+            void runVoiceTurn(query);
+          }
+        }, 500);
+      } else if (interim) {
+        const liveText = (accumulatedTranscriptRef.current ? accumulatedTranscriptRef.current + " " : "") + interim;
+        setUserText(liveText);
+
+        // Reset silence timer on interim speech
+        if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+        silenceTimerRef.current = setTimeout(() => {
+          const query = liveText.trim();
+          accumulatedTranscriptRef.current = "";
+          if (query) {
+            void runVoiceTurn(query);
+          }
+        }, 900);
+      }
+    };
+
+    recognition.onerror = (event: any) => {
+      // Ignore routine aborts/no-speech
+      if (event.error === "no-speech" || event.error === "aborted") return;
+      console.warn("Speech recognition notice:", event.error);
+    };
+
+    recognition.onend = () => {
+      // Automatically keep recognition alive if in listening phase
+      if (!closingRef.current && !mutedRef.current && phaseRef.current === "listening") {
+        try {
+          recognition.start();
+        } catch {}
+      }
+    };
+
+    recognitionRef.current = recognition;
+    try {
+      recognition.start();
+    } catch {}
+  }, [language, runVoiceTurn]);
+
+  // ---------------------------------------------------------------
+  // Server-Side STT Fallback via MediaRecorder (for non-WebSpeech browsers)
   // ---------------------------------------------------------------
   const handleUtterance = useCallback(
     async (blob: Blob) => {
@@ -407,11 +591,6 @@ export function VoiceMode({
 
         if (!res.ok) {
           const message = json?.error?.message ?? "Could not transcribe that.";
-          if (res.status === 503) {
-            setErrorMessage(message);
-            setPhaseSafe("error");
-            return;
-          }
           setNotice(message);
           setPhaseSafe("listening");
           return;
@@ -428,16 +607,13 @@ export function VoiceMode({
         setUserText(transcript);
         await runVoiceTurn(transcript);
       } catch {
-        setNotice("Network problem while sending your question.");
+        setNotice("Network connection problem.");
         setPhaseSafe("listening");
       }
     },
     [runVoiceTurn, setPhaseSafe]
   );
 
-  // ---------------------------------------------------------------
-  // Recording segments
-  // ---------------------------------------------------------------
   const startSegment = useCallback(() => {
     const stream = streamRef.current;
     if (!stream || closingRef.current) return;
@@ -447,8 +623,6 @@ export function VoiceMode({
     try {
       recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
     } catch {
-      setErrorMessage("This browser cannot record audio. Try Chrome or Edge.");
-      setPhaseSafe("error");
       return;
     }
 
@@ -459,14 +633,10 @@ export function VoiceMode({
     recorder.ondataavailable = (e) => {
       if (e.data.size > 0) chunksRef.current.push(e.data);
     };
-    // Record in 1-second slices so chunks accumulate continuously.
-    // When speech ends, the blob is already mostly built — only the
-    // last sub-second chunk needs appending, cutting packaging time.
     recorder.start(1000);
     recorderRef.current = recorder;
-  }, [setPhaseSafe]);
+  }, []);
 
-  /** Stops the current segment; sends it on only if speech was heard. */
   const finishSegment = useCallback(
     (send: boolean) => {
       const recorder = recorderRef.current;
@@ -484,22 +654,18 @@ export function VoiceMode({
         if (send && spokeLongEnough && !closingRef.current) {
           void handleUtterance(blob);
         }
-        // Always restart the mic immediately — keep it hot at all times
-        // so the next utterance or barge-in is captured without delay.
         if (!closingRef.current) startSegment();
       };
 
       try {
         recorder.stop();
-      } catch {
-        /* already stopped */
-      }
+      } catch {}
     },
     [handleUtterance, startSegment]
   );
 
   // ---------------------------------------------------------------
-  // Voice activity detection
+  // Voice Activity Detection & Audio Visualizer
   // ---------------------------------------------------------------
   const tick = useCallback(() => {
     const analyser = analyserRef.current;
@@ -516,65 +682,65 @@ export function VoiceMode({
 
     const now = performance.now();
     const current = phaseRef.current;
-    const listening = current === "listening" || current === "speaking";
 
-    if (!mutedRef.current && listening) {
-      const threshold = current === "speaking" ? BARGE_THRESHOLD : SPEECH_THRESHOLD;
-
-      if (rms > threshold) {
-        if (!heardSpeechRef.current) {
-          heardSpeechRef.current = true;
-          speechStartedAtRef.current = now;
-        }
-        lastVoiceAtRef.current = now;
-
-        // Barge-in: talking over the assistant cancels it immediately.
-        if (current === "speaking") {
+    // VAD handling when WebSpeech is not active or as secondary VAD
+    if (!mutedRef.current) {
+      if (current === "speaking") {
+        // Smart Echo Suppression:
+        // Ignore microphone energy during the first 1200ms of assistant speaking
+        const speakingAge = now - speakingStartedAtRef.current;
+        if (speakingAge > 1200 && rms > BARGE_THRESHOLD) {
+          // Intentional loud user barge-in detected!
           cancelSpeech();
           chatAbortRef.current?.abort();
           streamDoneRef.current = true;
           setPhaseSafe("listening");
+          resumeRecognition();
         }
-      } else if (heardSpeechRef.current && now - lastVoiceAtRef.current > SILENCE_MS) {
-        finishSegment(true);
-      } else if (!heardSpeechRef.current && now - segmentStartedAtRef.current > IDLE_RESET_MS) {
-        // Nothing said for a while — recycle the recorder so we are not
-        // accumulating minutes of silence in memory.
-        finishSegment(false);
-        startSegment();
+      } else if (current === "listening" && !speechSupportedRef.current) {
+        // Fallback VAD for browsers without native WebSpeech
+        if (rms > SPEECH_THRESHOLD) {
+          if (!heardSpeechRef.current) {
+            heardSpeechRef.current = true;
+            speechStartedAtRef.current = now;
+          }
+          lastVoiceAtRef.current = now;
+        } else if (heardSpeechRef.current && now - lastVoiceAtRef.current > SILENCE_MS) {
+          finishSegment(true);
+        } else if (!heardSpeechRef.current && now - segmentStartedAtRef.current > IDLE_RESET_MS) {
+          finishSegment(false);
+          startSegment();
+        }
       }
     }
 
     rafRef.current = requestAnimationFrame(tick);
-  }, [cancelSpeech, finishSegment, setPhaseSafe, startSegment]);
+  }, [cancelSpeech, finishSegment, resumeRecognition, setPhaseSafe, startSegment]);
 
   // ---------------------------------------------------------------
-  // Session lifecycle
+  // Lifecycle Management
   // ---------------------------------------------------------------
   const teardown = useCallback(() => {
     closingRef.current = true;
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
     rafRef.current = null;
 
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
+
+    pauseRecognition();
+    recognitionRef.current = null;
+
     chatAbortRef.current?.abort();
     ttsAbortRef.current?.abort();
     ttsQueueRef.current = [];
-    cancelSpeechRef.current = true;
-
-    // Stop both audio elements in the ping-pong pair.
-    for (const el of [audioElARef.current, audioElBRef.current]) {
-      if (el) {
-        el.pause();
-        el.removeAttribute("src");
-      }
-    }
-    releaseUrls();
+    cancelSpeech();
 
     try {
       recorderRef.current?.stop();
-    } catch {
-      /* noop */
-    }
+    } catch {}
     recorderRef.current = null;
 
     streamRef.current?.getTracks().forEach((t) => t.stop());
@@ -583,7 +749,7 @@ export function VoiceMode({
     void audioCtxRef.current?.close().catch(() => {});
     audioCtxRef.current = null;
     analyserRef.current = null;
-  }, [releaseUrls]);
+  }, [cancelSpeech, pauseRecognition]);
 
   useEffect(() => {
     if (!open) return;
@@ -604,17 +770,20 @@ export function VoiceMode({
 
     (async () => {
       try {
+        // Unlock audio system immediately upon opening
+        unlockAudioPlayback();
+
         const stream = await navigator.mediaDevices.getUserMedia({
           audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
         });
+
         if (cancelled) {
           stream.getTracks().forEach((t) => t.stop());
           return;
         }
         streamRef.current = stream;
 
-        const Ctor: typeof AudioContext =
-          window.AudioContext ?? (window as any).webkitAudioContext;
+        const Ctor: typeof AudioContext = window.AudioContext ?? (window as any).webkitAudioContext;
         const ctx = new Ctor();
         await ctx.resume().catch(() => {});
         const source = ctx.createMediaStreamSource(stream);
@@ -628,16 +797,20 @@ export function VoiceMode({
 
         setPhaseSafe("listening");
         lastVoiceAtRef.current = performance.now();
+
+        // Initialize Web Speech Recognition
+        initWebSpeech();
+
+        // Start fallback MediaRecorder segment if WebSpeech isn't present
         startSegment();
+
         rafRef.current = requestAnimationFrame(tick);
       } catch (err: any) {
         const denied = err?.name === "NotAllowedError" || err?.name === "SecurityError";
         setErrorMessage(
           denied
-            ? "Microphone access was blocked. Allow it in your browser's address bar, then try again."
-            : err?.name === "NotFoundError"
-              ? "No microphone was found on this device."
-              : "Could not start the microphone."
+            ? "Microphone access was blocked. Allow it in your browser address bar and try again."
+            : "Could not start the microphone."
         );
         setPhaseSafe("error");
       }
@@ -647,12 +820,9 @@ export function VoiceMode({
       cancelled = true;
       teardown();
     };
-    // Intentionally keyed on `open` alone. The helpers below are
-    // recreated whenever the parent re-renders, and listing them here
-    // would tear the microphone down and back up mid-conversation.
-  }, [open]);
+  }, [initWebSpeech, open, setPhaseSafe, startSegment, teardown, tick, unlockAudioPlayback]);
 
-  // Esc closes, M toggles the mic — the two controls worth a shortcut.
+  // Keyboard shortcuts (Esc, M)
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -660,38 +830,46 @@ export function VoiceMode({
         e.preventDefault();
         onClose();
       } else if (e.key.toLowerCase() === "m" && !e.metaKey && !e.ctrlKey) {
-        setMuted((m) => !m);
+        setMuted((m) => {
+          const next = !m;
+          if (next) pauseRecognition();
+          else resumeRecognition();
+          return next;
+        });
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+  }, [open, onClose, pauseRecognition, resumeRecognition]);
 
   if (!open) return null;
 
   const statusLabel =
     phase === "starting"
-      ? "Starting microphone…"
+      ? "Initializing voice…"
       : phase === "listening"
-        ? muted ? "Microphone muted" : "I'm listening…"
+        ? muted
+          ? "Microphone muted"
+          : "Listening… Speak anytime"
         : phase === "transcribing"
-          ? "Thinking…"
+          ? "Understanding your question…"
           : phase === "thinking"
             ? "Thinking…"
             : phase === "speaking"
-              ? "Speaking… (interrupt anytime)"
+              ? "Speaking… (Tap to interrupt)"
               : "Voice mode stopped";
 
-  const orbScale = 1 + (phase === "listening" && !muted ? level * 0.45 : phase === "speaking" ? 0.15 : 0);
+  const orbScale = 1 + (phase === "listening" && !muted ? level * 0.45 : phase === "speaking" ? 0.18 : 0);
 
   return (
     <div
       role="dialog"
       aria-modal="true"
       aria-label="Voice conversation with LegalSetu"
-      className="fixed inset-0 z-[120] flex flex-col bg-gradient-to-b from-slate-950 via-[#0B1120] to-slate-950"
+      onClick={unlockAudioPlayback}
+      className="fixed inset-0 z-[120] flex flex-col bg-gradient-to-b from-slate-950 via-[#080d19] to-slate-950 select-none"
     >
-      {/* Dual audio elements for gapless ping-pong playback */}
+      {/* Dual audio elements for gapless playback */}
       <audio ref={audioElARef} preload="auto" />
       <audio ref={audioElBRef} preload="auto" />
 
@@ -699,18 +877,18 @@ export function VoiceMode({
       <div className="flex items-center justify-between px-5 py-4 sm:px-8">
         <div className="flex items-center gap-2.5">
           <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-brandBlue/15 text-brandBlue">
-            <AudioLines className="h-4.5 w-4.5" />
+            <AudioLines className="h-5 w-5" />
           </span>
           <div>
-            <p className="text-sm font-semibold text-white">Voice mode</p>
-            <p className="text-[11px] uppercase tracking-wider text-slate-500">
+            <p className="text-sm font-bold text-white">Voice Mode (Continuous)</p>
+            <p className="text-[11px] uppercase tracking-wider text-slate-400">
               {mode === "case"
-                ? "Case analysis"
+                ? "Case Analysis"
                 : mode === "quick"
-                  ? "Quick answer"
+                  ? "Quick Answer"
                   : mode === "fir"
                     ? "Generate FIR"
-                    : "Know the law"}
+                    : "Know the Law"}
             </p>
           </div>
         </div>
@@ -732,67 +910,78 @@ export function VoiceMode({
             <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-rose-500/15 text-rose-400">
               <AlertTriangle className="h-7 w-7" />
             </div>
-            <p className="mt-4 text-base font-semibold text-white">Voice mode can&apos;t run</p>
+            <p className="mt-4 text-base font-semibold text-white">Voice mode unavailable</p>
             <p className="mt-2 text-sm leading-relaxed text-slate-400">{errorMessage}</p>
             <button
               type="button"
               onClick={onClose}
               className="mt-6 rounded-xl bg-white/10 px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-white/20"
             >
-              Back to typing
+              Return to text chat
             </button>
           </div>
         ) : (
           <>
-            {/* Orb */}
-            <div className="relative flex h-48 w-48 items-center justify-center sm:h-56 sm:w-56">
+            {/* Interactive Animated Orb */}
+            <div
+              className="relative flex h-52 w-52 cursor-pointer items-center justify-center sm:h-64 sm:w-64"
+              onClick={() => {
+                unlockAudioPlayback();
+                if (phase === "speaking") {
+                  cancelSpeech();
+                  setPhaseSafe("listening");
+                  resumeRecognition();
+                }
+              }}
+              title={phase === "speaking" ? "Click to interrupt" : undefined}
+            >
               <span
                 className={
-                  "absolute inset-0 rounded-full blur-2xl transition-opacity duration-500 " +
+                  "absolute inset-0 rounded-full blur-3xl transition-opacity duration-500 " +
                   (phase === "speaking"
-                    ? "bg-emerald-500/25 opacity-100"
+                    ? "bg-emerald-500/30 opacity-100 animate-pulse"
                     : phase === "thinking" || phase === "transcribing"
-                      ? "bg-amber-500/20 opacity-100"
+                      ? "bg-amber-500/25 opacity-100"
                       : muted
                         ? "bg-slate-500/20 opacity-70"
-                        : "bg-brandBlue/30 opacity-100")
+                        : "bg-brandBlue/35 opacity-100")
                 }
               />
               {(phase === "listening" && !muted) || phase === "speaking" ? (
                 <>
-                  <span className="absolute inset-6 animate-ping rounded-full border border-white/10" />
-                  <span className="absolute inset-10 animate-pulse rounded-full border border-white/10" />
+                  <span className="absolute inset-4 animate-ping rounded-full border border-white/15" />
+                  <span className="absolute inset-8 animate-pulse rounded-full border border-white/20" />
                 </>
               ) : null}
 
               <div
                 style={{ transform: `scale(${orbScale.toFixed(3)})` }}
                 className={
-                  "relative flex h-32 w-32 items-center justify-center rounded-full shadow-2xl transition-transform duration-[60ms] sm:h-36 sm:w-36 " +
+                  "relative flex h-36 w-36 items-center justify-center rounded-full shadow-2xl transition-transform duration-[50ms] sm:h-44 sm:w-44 " +
                   (phase === "speaking"
-                    ? "bg-gradient-to-br from-emerald-400 to-teal-600"
+                    ? "bg-gradient-to-br from-emerald-400 via-teal-500 to-emerald-700 shadow-emerald-500/30"
                     : phase === "thinking" || phase === "transcribing"
-                      ? "bg-gradient-to-br from-amber-400 to-orange-600"
+                      ? "bg-gradient-to-br from-amber-400 via-orange-500 to-amber-700 shadow-amber-500/30"
                       : muted
-                        ? "bg-gradient-to-br from-slate-600 to-slate-800"
-                        : "bg-gradient-to-br from-blue-400 to-indigo-700")
+                        ? "bg-gradient-to-br from-slate-600 to-slate-800 shadow-slate-700/30"
+                        : "bg-gradient-to-br from-blue-500 via-indigo-600 to-blue-800 shadow-blue-500/40")
                 }
               >
                 {phase === "thinking" || phase === "transcribing" || phase === "starting" ? (
-                  <Loader2 className="h-9 w-9 animate-spin text-white" />
+                  <Loader2 className="h-11 w-11 animate-spin text-white" />
                 ) : phase === "speaking" ? (
-                  <Volume2 className="h-9 w-9 text-white" />
+                  <Volume2 className="h-11 w-11 text-white animate-bounce" />
                 ) : muted ? (
-                  <MicOff className="h-9 w-9 text-white" />
+                  <MicOff className="h-11 w-11 text-white" />
                 ) : (
-                  <Mic className="h-9 w-9 text-white" />
+                  <Mic className="h-11 w-11 text-white" />
                 )}
               </div>
             </div>
 
-            {/* Status + live transcript */}
-            <div className="w-full max-w-2xl text-center" aria-live="polite" aria-atomic="false">
-              <p className="text-sm font-semibold uppercase tracking-widest text-slate-400">
+            {/* Status & Live Transcript */}
+            <div className="w-full max-w-2xl text-center" aria-live="polite">
+              <p className="text-sm font-bold uppercase tracking-widest text-slate-400">
                 {statusLabel}
               </p>
 
@@ -802,13 +991,13 @@ export function VoiceMode({
                 </p>
               )}
 
-              {/* Previous turns — scrollable mini-transcript */}
+              {/* Scrollable Conversation History */}
               {turns.length > 0 && (
-                <div className="mt-4 max-h-[18vh] space-y-2 overflow-y-auto rounded-2xl border border-white/5 bg-white/[0.02] px-4 py-3">
+                <div className="mt-4 max-h-[16vh] space-y-2 overflow-y-auto rounded-2xl border border-white/5 bg-white/[0.02] px-4 py-3">
                   {turns.map((t, i) => (
                     <div key={i} className="text-left text-xs">
-                      <p className="text-slate-500"><span className="font-semibold text-slate-400">You:</span> {t.user}</p>
-                      <p className="mt-0.5 text-slate-500"><span className="font-semibold text-brandBlue/70">LegalSetu:</span> {t.assistant.slice(0, 120)}{t.assistant.length > 120 ? "…" : ""}</p>
+                      <p className="text-slate-400"><span className="font-semibold text-slate-300">You:</span> {t.user}</p>
+                      <p className="mt-0.5 text-slate-400"><span className="font-semibold text-brandBlue">LegalSetu:</span> {t.assistant.slice(0, 150)}{t.assistant.length > 150 ? "…" : ""}</p>
                     </div>
                   ))}
                 </div>
@@ -817,16 +1006,16 @@ export function VoiceMode({
               {userText && (
                 <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 px-5 py-3 text-left">
                   <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">You said</p>
-                  <p className="mt-1 text-base leading-relaxed text-white" data-no-translate>
+                  <p className="mt-1 text-base font-medium leading-relaxed text-white">
                     {userText}
                   </p>
                 </div>
               )}
 
               {answerText && (
-                <div className="mt-3 max-h-[32vh] overflow-y-auto rounded-2xl border border-brandBlue/20 bg-brandBlue/5 px-5 py-3 text-left">
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-brandBlue">LegalSetu</p>
-                  <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-slate-200">
+                <div className="mt-3 max-h-[30vh] overflow-y-auto rounded-2xl border border-brandBlue/30 bg-brandBlue/10 px-5 py-3 text-left">
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-brandBlue">LegalSetu speaking</p>
+                  <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-slate-100">
                     {answerText}
                   </p>
                 </div>
@@ -838,16 +1027,24 @@ export function VoiceMode({
 
       {/* Controls */}
       {phase !== "error" && (
-        <div className="flex items-center justify-center gap-4 px-6 pb-10 pt-2">
+        <div className="flex items-center justify-center gap-5 px-6 pb-10 pt-2">
           <button
             type="button"
-            onClick={() => setMuted((m) => !m)}
+            onClick={() => {
+              unlockAudioPlayback();
+              setMuted((m) => {
+                const next = !m;
+                if (next) pauseRecognition();
+                else resumeRecognition();
+                return next;
+              });
+            }}
             aria-pressed={muted}
             aria-label={muted ? "Unmute microphone" : "Mute microphone"}
             className={
               "flex h-14 w-14 items-center justify-center rounded-full border transition-all hover:scale-105 " +
               (muted
-                ? "border-rose-500/40 bg-rose-500/15 text-rose-300"
+                ? "border-rose-500/40 bg-rose-500/20 text-rose-300"
                 : "border-white/15 bg-white/5 text-white hover:bg-white/10")
             }
           >
@@ -857,8 +1054,8 @@ export function VoiceMode({
           <button
             type="button"
             onClick={onClose}
-            aria-label="End voice mode"
-            className="flex h-16 items-center gap-2.5 rounded-full bg-rose-600 px-8 text-base font-bold text-white shadow-lg shadow-rose-600/25 transition-all hover:scale-105 hover:bg-rose-500"
+            aria-label="End voice conversation"
+            className="flex h-16 items-center gap-2.5 rounded-full bg-rose-600 px-8 text-base font-bold text-white shadow-lg shadow-rose-600/30 transition-all hover:scale-105 hover:bg-rose-500"
           >
             <X className="h-5 w-5" />
             End
@@ -869,11 +1066,12 @@ export function VoiceMode({
               type="button"
               onClick={() => {
                 cancelSpeech();
-                cancelSpeechRef.current = false;
                 setPhaseSafe("listening");
+                resumeRecognition();
               }}
-              aria-label="Stop speaking"
-              className="flex h-14 w-14 items-center justify-center rounded-full border border-white/15 bg-white/5 text-white transition-all hover:scale-105 hover:bg-white/10"
+              aria-label="Interrupt speaking"
+              title="Interrupt and speak"
+              className="flex h-14 w-14 items-center justify-center rounded-full border border-emerald-500/40 bg-emerald-500/20 text-emerald-300 transition-all hover:scale-105 hover:bg-emerald-500/30"
             >
               <Volume2 className="h-6 w-6" />
             </button>

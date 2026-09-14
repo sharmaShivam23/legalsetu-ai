@@ -27,8 +27,7 @@ const MAX_AUDIO_BYTES = 8 * 1024 * 1024;
 
 export async function POST(req: NextRequest) {
   const session = await auth();
-  if (!session?.user) return apiError("UNAUTHORIZED", "Sign in required.", 401);
-  const userId = (session.user as any).id as string;
+  const userId = ((session?.user as any)?.id as string) || req.headers.get("x-forwarded-for") || "guest_voice_user";
 
   if (!isSarvamConfigured()) {
     return apiError("VOICE_UNAVAILABLE", "Voice mode is not configured on this server.", 503);

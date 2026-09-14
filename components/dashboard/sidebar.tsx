@@ -7,18 +7,9 @@ import { signOut, useSession } from "next-auth/react";
 import {
   Scale,
   MessageSquarePlus,
-  MessagesSquare,
-  Folder,
-  FileText,
-  FileSignature,
-  BookMarked,
-  Users,
-  History,
-  Settings,
   Menu,
   X,
   Sparkles,
-  LayoutDashboard,
   LogOut,
   User,
   ChevronLeft,
@@ -29,15 +20,15 @@ import { LanguageSwitcher } from "@/components/i18n/LanguageSwitcher";
 import { ThemeToggle } from "@/components/common/ThemeToggle";
 
 const NAV_ITEMS = [
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/dashboard/chat", label: "Ask LegalSetu", icon: MessagesSquare },
-  { href: "/dashboard/cases", label: "My Cases", icon: Folder },
-  { href: "/dashboard/documents", label: "Documents OCR", icon: FileText },
-  { href: "/dashboard/fir", label: "FIR Assistant", icon: FileSignature },
-  { href: "/dashboard/sources", label: "Saved Sources", icon: BookMarked },
-  { href: "/dashboard/lawyer", label: "Lawyer / Legal Aid", icon: Users },
-  { href: "/dashboard/history", label: "History", icon: History },
-  { href: "/dashboard/settings", label: "Settings", icon: Settings },
+  { href: "/dashboard", label: "Dashboard" },
+  { href: "/dashboard/chat", label: "Ask LegalSetu" },
+  { href: "/dashboard/cases", label: "My Cases" },
+  { href: "/dashboard/documents", label: "Documents OCR" },
+  { href: "/dashboard/fir", label: "FIR Assistant" },
+  { href: "/dashboard/sources", label: "Saved Sources" },
+  { href: "/dashboard/lawyer", label: "Lawyer / Legal Aid" },
+  { href: "/dashboard/history", label: "History" },
+  { href: "/dashboard/settings", label: "Settings" },
 ];
 
 export function Sidebar() {
@@ -175,10 +166,11 @@ export function Sidebar() {
                   <div className="absolute left-0 top-1/4 h-1/2 w-1 rounded-r-full bg-brandBlue"></div>
                 )}
                 
-                <div className="nav-icon transition-all duration-300 shrink-0">
-                  <item.icon className={cn("h-4 w-4", active ? "text-brandBlue" : "text-textSecondary")} />
-                </div>
-                {!isCollapsed && <span className="truncate">{item.label}</span>}
+                {isCollapsed ? (
+                  <span className="text-xs font-bold uppercase text-textSecondary">{item.label.slice(0, 2)}</span>
+                ) : (
+                  <span className="truncate">{item.label}</span>
+                )}
               </Link>
             );
           })}
