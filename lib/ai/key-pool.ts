@@ -3,7 +3,24 @@ import { Redis } from "ioredis";
 import { isQuotaError } from "./errors";
 
 const redisUrl = process.env.REDIS_URL;
-const redis = redisUrl ? new Redis(redisUrl, { lazyConnect: true, maxRetriesPerRequest: 1 }) : null;
+// connectTimeout + retryStrategy:null bound the worst case a broken/stale
+// REDIS_URL can cost: without these, ioredis's default retry strategy
+// (~20 attempts with backoff) means every call on a serverless cold start
+// can burn several seconds of the function's own timeout budget before
+// falling through to the in-memory fallback below — on Vercel that was
+// eating into the 10-60s request budget on EVERY chat request, before
+// generation even started. A no-op error listener stops ioredis's
+// "Unhandled error event" console spam; every call site already catches
+// and falls back to memory, so there is nothing for that listener to do.
+const redis = redisUrl
+  ? new Redis(redisUrl, {
+      lazyConnect: true,
+      maxRetriesPerRequest: 1,
+      connectTimeout: 3000,
+      retryStrategy: () => null,
+    })
+  : null;
+redis?.on("error", () => {});
 const memoryBenched = new Map<string, number>();
 
 /** A quota/rate limit usually clears within the hour on free tiers. */

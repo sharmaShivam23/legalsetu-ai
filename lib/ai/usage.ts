@@ -2,7 +2,22 @@
 import { Redis } from "ioredis";
 
 const redisUrl = process.env.REDIS_URL;
-const redis = redisUrl ? new Redis(redisUrl) : null;
+// Same bounded-failure config as lib/ai/key-pool.ts, and for the same
+// reason: this client is hit on the FIRST line of every chat request
+// (incrementAndCheckUsage runs before retrieval even starts), so with
+// ioredis's default retry strategy a broken/stale REDIS_URL silently
+// burns several seconds of the serverless function's own timeout budget
+// on every single request before falling back to the in-memory map
+// below — indistinguishable from the app just being slow or hanging.
+const redis = redisUrl
+  ? new Redis(redisUrl, {
+      lazyConnect: true,
+      maxRetriesPerRequest: 1,
+      connectTimeout: 3000,
+      retryStrategy: () => null,
+    })
+  : null;
+redis?.on("error", () => {});
 const memoryUsage = new Map<string, number>();
 
 export interface UsageCheckResult {
