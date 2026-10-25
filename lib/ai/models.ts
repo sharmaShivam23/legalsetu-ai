@@ -49,7 +49,7 @@ export const AI_MODELS: AIModel[] = [
     category: "ANTHROPIC",
     name: "Claude",
     capability: "Balanced",
-    getApiId: () => process.env.ANTHROPIC_CHAT_MODEL || "claude-3-5-sonnet-20241022",
+    getApiId: () => process.env.ANTHROPIC_CHAT_MODEL || "claude-sonnet-5-5",
   },
   // Groq
   {
