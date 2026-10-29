@@ -18,6 +18,14 @@ export interface RAGSearchFilters {
   language?: string;
   sourceType?: string;
   actName?: string;
+  /**
+   * How many chunks to retrieve. Defaults to TOP_K in the retriever.
+   * Voice mode lowers it: a spoken answer is four sentences long and
+   * cannot cite six sources, so the extra chunks only enlarge the
+   * prompt — and prompt size is paid for in time-to-first-token, which
+   * in a spoken conversation is silence the listener sits through.
+   */
+  topK?: number;
 }
 
 export interface RAGSearchResult {

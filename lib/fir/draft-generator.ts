@@ -51,7 +51,7 @@ function valueFor(state: FIRCaseState, key: Parameters<typeof getFact>[1]): stri
  * Asks the model to order the complainant's account chronologically.
  * It is given ONLY the recorded facts, and told it may not add to them.
  */
-async function buildNarrative(state: FIRCaseState): Promise<string> {
+export async function buildNarrative(state: FIRCaseState): Promise<string> {
   const target = languageName(normalizeLanguage(state.language));
   const facts = state.facts
     .map((f) => `- ${f.key}: ${f.value}`)
@@ -114,6 +114,11 @@ export interface GeneratedDraft {
   document: ComplaintDocument;
   /** Flattened text, used for validation and on-screen review. */
   plainText: string;
+  /** The same draft as markdown, for display in the chat thread. The
+   *  plain text renders there as one run-on paragraph. */
+  markdown: string;
+  /** The narrative used — store it on the case state so the PDF reuses it. */
+  narrative: string;
   issues: DraftIssue[];
   /** True when nothing unsupported survived into the final text. */
   validated: boolean;
@@ -123,7 +128,9 @@ export async function generateComplaintDraft(
   state: FIRCaseState,
   complainantFallbackName?: string
 ): Promise<GeneratedDraft> {
-  const narrativeRaw = await buildNarrative(state);
+  // Reuse the narrative the user already reviewed when there is one (the
+  // PDF route): regenerating it was slow, could fail, and could reword it.
+  const narrativeRaw = state.narrative?.trim() ? state.narrative : await buildNarrative(state);
   // Any statute the narrative smuggled in is removed before validation:
   // the complaint stands on its facts, and an unverified section is the
   // one thing safe to drop outright.
@@ -262,6 +269,18 @@ export async function generateComplaintDraft(
     document.declaration,
   ].join("\n");
 
+  const markdown = [
+    `### ${COMPLAINT_TITLE}`,
+    document.addressee.join("  \n"),
+    `**Subject:** ${document.subject}`,
+    document.salutation,
+    document.opening,
+    ...sections.flatMap((s) => [`#### ${s.heading}`, s.body.join("\n\n")]),
+    document.declaration,
+    `Place: ${document.place ?? "________"}  \nDate: ${document.date}  \nSignature: ________  \n(${document.signatureName})`,
+    `> ${DRAFT_DISCLAIMER}`,
+  ].join("\n\n");
+
   const validation = validateDraft(plainText, state);
   if (!validation.ok) {
     logger.warn("FIR draft contained unsupported content", {
@@ -273,6 +292,8 @@ export async function generateComplaintDraft(
   return {
     document,
     plainText,
+    markdown,
+    narrative,
     issues: validation.issues,
     validated: validation.ok,
   };

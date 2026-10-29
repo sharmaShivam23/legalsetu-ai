@@ -79,6 +79,8 @@ export async function POST(req: NextRequest, { params }: Params) {
     }
 
     if (parsed.data.language) state = { ...state, language: parsed.data.language };
+    // An explicit (re)draft always rewrites the narrative from current facts.
+    state = { ...state, narrative: undefined };
     if (state.legalContext.length === 0) {
       state = { ...state, legalContext: await retrieveLegalContext(state) };
     }
@@ -91,6 +93,8 @@ export async function POST(req: NextRequest, { params }: Params) {
     const nextVersion = draft.draftVersion + 1;
     const confirmedState: FIRCaseState = {
       ...state,
+      // Kept so the PDF reproduces this exact text without another model call.
+      narrative: generated.narrative,
       stage: "DRAFTED",
       confirmedAt: new Date().toISOString(),
       draftVersion: nextVersion,

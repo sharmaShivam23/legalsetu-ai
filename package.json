@@ -19,7 +19,10 @@
     "db:seed": "tsx prisma/seed.ts",
     "db:studio": "prisma studio",
     "rag:ingest": "tsx scripts/ingest-documents.ts",
-    "rag:embed": "tsx scripts/generate-embeddings.ts"
+    "rag:embed": "tsx scripts/generate-embeddings.ts",
+    "preflight": "tsx scripts/preflight.ts",
+    "i18n:warm": "tsx scripts/warm-translations.ts",
+    "voice:smoke": "tsx scripts/voice-smoke.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

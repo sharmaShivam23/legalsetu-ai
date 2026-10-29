@@ -130,7 +130,7 @@ export default function ChatPage() {
   modeRef.current = mode;
 
   // Selected AI Model
-  const [modelId, setModelId] = useState<string>("gemini-default");
+  const [modelId, setModelId] = useState<string>("auto");
   useEffect(() => {
     try {
       const saved = localStorage.getItem("ls_chat_model");

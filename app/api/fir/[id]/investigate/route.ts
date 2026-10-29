@@ -90,6 +90,9 @@ export async function POST(req: NextRequest, { params }: Params) {
       nextState = { ...nextState, legalContext: await retrieveLegalContext(nextState) };
     }
 
+    // New facts may have arrived; never let the PDF reuse an old narrative.
+    nextState = { ...nextState, narrative: undefined };
+
     await prisma.fIRDraft.update({
       where: { id },
       data: {

@@ -20,6 +20,8 @@
 // ==========================================================
 
 import { getAIProvider } from "@/lib/ai/provider";
+import { generateCompletion } from "@/lib/ai/llm";
+import { canUseSarvamTranslation, sarvamTranslateMany } from "./sarvam-translate";
 import { logger } from "@/lib/logging/logger";
 import { lookupCached, storeTranslations } from "./cache";
 import {
@@ -31,6 +33,19 @@ import { DEFAULT_LANGUAGE, languageName, normalizeLanguage } from "./languages";
 
 /** Strings sent to the model in a single call. */
 const BATCH_SIZE = 40;
+
+/**
+ * How many LLM batches may be in flight at once.
+ *
+ * Two, not four. This is the FALLBACK path now that Sarvam handles the
+ * common languages, and it shares a budget with chat: Groq's free tier
+ * caps the whole organisation at 8,000 tokens/minute (every key in this
+ * project belongs to one org, so rotating keys buys no headroom). A
+ * 40-string batch asks for roughly 2,200 tokens, so four concurrent
+ * batches exceed the minute budget on their own and return 429 for
+ * everything, including whatever the user is asking the chatbot.
+ */
+const MAX_CONCURRENT_BATCHES = 2;
 
 /**
  * Marker string that lets the mock/demo provider recognise a
@@ -126,9 +141,14 @@ async function translateChunk(
     targetLanguage
   );
 
-  const provider = await getAIProvider();
-  const raw = await provider.complete({
-    messages: [
+  // Routed through generateCompletion, NOT provider.complete(), so that a
+  // dead or blocked primary provider falls through to the next configured
+  // one exactly as chat does. Calling the raw provider here meant a single
+  // blocked API project silently disabled translation for the whole app:
+  // every batch threw, every batch was caught, and every page quietly
+  // stayed in English.
+  const raw = await generateCompletion(
+    [
       {
         role: "system",
         content:
@@ -136,9 +156,8 @@ async function translateChunk(
       },
       { role: "user", content: prompt },
     ],
-    temperature: 0,
-    maxTokens: 8000,
-  });
+    { temperature: 0, maxTokens: 8000 }
+  );
 
   const parsed = parseBatchResponse(raw, items.length);
 
@@ -202,27 +221,82 @@ export async function translateBatchDetailed(
   if (misses.length > 0) {
     const fresh: { source: string; translated: string }[] = [];
 
-    for (let i = 0; i < misses.length; i += BATCH_SIZE) {
-      const chunk = misses.slice(i, i + BATCH_SIZE);
+    // ---- Tier 1: Sarvam Mayura -------------------------------------
+    // A dedicated translation model, on a quota of its own. This is
+    // what keeps a page translating in the background from eating the
+    // chat model's tokens-per-minute budget and 429-ing the chatbot
+    // mid-answer. Anything Mayura cannot take (Urdu, Assamese,
+    // Maithili, Bhojpuri, Santali, or a transient failure) drops
+    // through to the LLM path below rather than being lost.
+    let pending = misses;
+    if (canUseSarvamTranslation(target)) {
       try {
-        const translated = await translateChunk(chunk, target);
-        translated.forEach((value, key) => {
+        const { translations: viaSarvam, failed } = await sarvamTranslateMany(misses, target);
+        viaSarvam.forEach((value, key) => {
           resolved.set(key, value);
           fresh.push({ source: key, translated: value });
         });
+        pending = failed;
       } catch (err) {
-        // Partial failure must not break the page — untranslated
-        // strings simply stay in English.
-        degraded = true;
-        logger.warn("Translation batch failed", {
+        // Never fatal: the LLM path can still serve every string.
+        logger.warn("Sarvam translation unavailable, using the model instead", {
           targetLanguage: target,
-          batchSize: chunk.length,
-          errorType: String(err),
+          errorType: String(err).slice(0, 160),
         });
       }
     }
 
-    await storeTranslations(fresh, target);
+    // ---- Tier 2: the chat LLM --------------------------------------
+    const batches: string[][] = [];
+    for (let i = 0; i < pending.length; i += BATCH_SIZE) {
+      batches.push(pending.slice(i, i + BATCH_SIZE));
+    }
+
+    // Batches run CONCURRENTLY, in waves of MAX_CONCURRENT_BATCHES.
+    //
+    // They used to run one after another, which is what made switching
+    // language feel broken: a full page is ~150 strings, so four model
+    // calls of 40, each generating a few thousand tokens of Devanagari,
+    // strictly in series. Four x ~25s is the better part of two minutes
+    // of staring at English text.
+    //
+    // Concurrency is capped rather than unbounded because every batch
+    // shares one provider's per-minute request limit; firing twenty at
+    // once would trade a slow page for a 429 and a page that never
+    // translates at all.
+    for (let i = 0; i < batches.length; i += MAX_CONCURRENT_BATCHES) {
+      const wave = batches.slice(i, i + MAX_CONCURRENT_BATCHES);
+
+      const settled = await Promise.all(
+        wave.map(async (chunk) => {
+          try {
+            return { chunk, translated: await translateChunk(chunk, target) };
+          } catch (err) {
+            // Partial failure must not break the page — untranslated
+            // strings simply stay in English.
+            logger.warn("Translation batch failed", {
+              targetLanguage: target,
+              batchSize: chunk.length,
+              errorType: String(err),
+            });
+            return { chunk, translated: null };
+          }
+        })
+      );
+
+      for (const { translated } of settled) {
+        if (translated === null) {
+          degraded = true;
+          continue;
+        }
+        translated.forEach((value, key) => {
+          resolved.set(key, value);
+          fresh.push({ source: key, translated: value });
+        });
+      }
+    }
+
+    if (fresh.length > 0) await storeTranslations(fresh, target);
   }
 
   return {

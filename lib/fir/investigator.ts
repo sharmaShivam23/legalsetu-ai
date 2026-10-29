@@ -293,7 +293,11 @@ export async function runInvestigationTurn(
   // falling into.
   const answeredKey = state.pendingKey;
   if (answeredKey && !hasFact(next, answeredKey)) {
-    const declined = /^(no|none|nothing|i don'?t know|dont know|not sure|skip|na|n\/a)\b/i.test(
+    // Only "I don't know / skip" is a refusal. A plain "No" or "None" is an
+    // ANSWER — "Was anyone hurt?" "No." belongs in the complaint as "No
+    // injuries", and treating it as declined left those facts out of the
+    // draft entirely.
+    const declined = /^(i don'?t know|dont know|do not know|not sure|no idea|skip|pass|na|n\/a)\b/i.test(
       userMessage.trim()
     );
 

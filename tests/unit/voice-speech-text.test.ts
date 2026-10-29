@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { toSpeakable, extractSentences } from "@/lib/voice/speech-text";
+import { toSpeakable, extractSentences, extractClauses } from "@/lib/voice/speech-text";
 
 describe("toSpeakable", () => {
   it("drops heading markers but keeps the words", () => {
@@ -110,5 +110,28 @@ describe("streaming pipeline", () => {
     ]);
     expect(spoken.join(" ")).not.toContain("#");
     expect(spoken.join(" ")).not.toContain("mermaid");
+  });
+});
+
+describe("extractClauses first-clip cap", () => {
+  const longOpening =
+    "सबसे पहले मकान मालिक को लिखित में नोटिस भेजें जिसमें डिपॉजिट की वापसी की मांग हो और एक निश्चित तारीख दी गई हो";
+
+  it("cuts a long opening run with no punctuation at a word break", () => {
+    const { sentences, rest } = extractClauses(longOpening, 24, 60);
+    expect(sentences).toHaveLength(1);
+    expect(sentences[0].length).toBeLessThanOrEqual(60);
+    expect(sentences[0].length).toBeGreaterThanOrEqual(24);
+    // Nothing is lost or duplicated across the cut.
+    expect(`${sentences[0]} ${rest}`).toBe(longOpening);
+  });
+
+  it("does not force a cut when the cap is not requested", () => {
+    expect(extractClauses(longOpening).sentences).toEqual([]);
+  });
+
+  it("prefers a natural boundary over the forced cut", () => {
+    const { sentences } = extractClauses("Send a written notice to your landlord today. Then wait", 24, 60);
+    expect(sentences).toEqual(["Send a written notice to your landlord today."]);
   });
 });

@@ -6,11 +6,16 @@ import { retrieveRelevantChunks } from "@/lib/rag/retriever";
 import { buildRAGMessages, buildLanguageDirective, type ChatMode } from "@/lib/rag/prompt";
 import { isSmallTalk, buildSmallTalkPrompt } from "@/lib/rag/smalltalk";
 import { runInvestigationTurn } from "@/lib/fir/investigator";
-import { generateComplaintDraft } from "@/lib/fir/draft-generator";
+import { generateComplaintDraft, buildNarrative } from "@/lib/fir/draft-generator";
 import { retrieveLegalContext } from "@/lib/fir/legal-context";
 import { emptyCaseState, type FIRCaseState } from "@/lib/fir/case-state";
 import { buildMemoryBlock, extractMemories } from "@/lib/memory/memory";
-import { parseLeadingMarker, type MessageKind } from "@/lib/rag/marker";
+import {
+  parseLeadingMarker,
+  stripControlTokens,
+  stripLeadingMarker,
+  type MessageKind,
+} from "@/lib/rag/marker";
 import {
   auditCitations,
   adjustEvidenceLevel,
@@ -25,12 +30,20 @@ import { prisma } from "@/lib/db/prisma";
 import { logger } from "@/lib/logging/logger";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+// FIR turns run extraction + retrieval + drafting back to back; 60s was
+// cutting off the final draft turn on slower providers.
+export const maxDuration = 120;
 
 /** How much prior conversation to feed back to the model as context. */
 const HISTORY_TURN_LIMIT = 16;
+/** Earlier assistant replies are re-sent trimmed: a past 5,000-token
+ *  report repeated on every turn made each prompt slower and, on Groq,
+ *  pushed requests past the per-minute token cap. */
+const HISTORY_ASSISTANT_MAX_CHARS = 1500;
 /** How much of the running case narrative to embed for retrieval. */
 const CASE_NARRATIVE_MAX_CHARS = 2500;
+/** Chunks retrieved for a spoken answer. See the call site for why. */
+const VOICE_TOP_K = 3;
 
 /**
  * Server-Sent-Events streaming chat endpoint. Three modes share this
@@ -125,21 +138,32 @@ export async function POST(req: NextRequest) {
           if (!owned) {
             conversationId = undefined;
           } else {
+            // Newest N, then put back in order. Taking the first N with
+            // "asc" silently dropped the LATEST turns of a long thread, so
+            // the model never saw the user's most recent answers.
             const rows = await prisma.message.findMany({
               where: { conversationId, role: { in: ["USER", "ASSISTANT"] } },
-              orderBy: { createdAt: "asc" },
+              orderBy: { createdAt: "desc" },
               take: HISTORY_TURN_LIMIT,
               select: { role: true, content: true, kind: true },
             });
             // The WHERE clause already restricts this to USER/ASSISTANT
             // rows; Prisma's generated type just does not narrow on it.
-            priorMessages = rows as typeof priorMessages;
+            priorMessages = (rows.reverse() as typeof priorMessages).map((m) =>
+              // Older replies were saved with a mangled marker still in
+              // them ("@@Ask<|message|>…"). Fed back as history, the model
+              // copied that pattern into every new reply.
+              m.role === "ASSISTANT" ? { ...m, content: stripLeadingMarker(m.content) } : m
+            );
           }
         }
 
         const history: ChatMessage[] = priorMessages.map((m) => ({
           role: m.role === "USER" ? "user" : "assistant",
-          content: m.content,
+          content:
+            m.role === "ASSISTANT" && m.content.length > HISTORY_ASSISTANT_MAX_CHARS
+              ? m.content.slice(0, HISTORY_ASSISTANT_MAX_CHARS) + "\n[...earlier reply shortened]"
+              : m.content,
         }));
 
         // Case mode's intake bounds are enforced from what is actually
@@ -195,6 +219,10 @@ export async function POST(req: NextRequest) {
           // Seed the complaint from that account first, so the intake
           // asks only for what is genuinely still missing instead of
           // making them tell the whole story a second time.
+          //
+          // Done in the SAME extraction call as the new message: seeding
+          // with a separate call first doubled the wait on this turn.
+          let accountForTurn = content;
           if (isNewComplaint) {
             const priorAccount = priorMessages
               .filter((m) => m.role === "USER")
@@ -203,20 +231,11 @@ export async function POST(req: NextRequest) {
               .slice(-CASE_NARRATIVE_MAX_CHARS);
 
             if (priorAccount.trim().length > 30) {
-              const seeded = await runInvestigationTurn(currentState, priorAccount);
-              // Keep only the facts learned; the question it planned is
-              // discarded, because the user's actual message is answered
-              // in the turn below.
-              currentState = {
-                ...seeded.state,
-                askedQuestions: [],
-                pendingKey: undefined,
-                stage: "INVESTIGATING",
-              };
+              accountForTurn = `${priorAccount}\n\n${content}`;
             }
           }
 
-          const turn = await runInvestigationTurn(currentState, content);
+          const turn = await runInvestigationTurn(currentState, accountForTurn);
           let nextState = turn.state;
 
           send("kind", { kind: turn.complete ? "report" : "question" });
@@ -226,16 +245,30 @@ export async function POST(req: NextRequest) {
           if (turn.complete) {
             // Statutory context comes from the verified corpus only, and
             // the draft is checked for fabricated dates, amounts and
-            // sections before the user ever sees it.
-            if (nextState.legalContext.length === 0) {
-              nextState = { ...nextState, legalContext: await retrieveLegalContext(nextState) };
-            }
+            // sections before the user ever sees it. Retrieval and the
+            // narrative are independent, so they run side by side; the
+            // narrative is always rewritten here because facts may have
+            // changed since an earlier draft.
+            const [legalContext, narrative] = await Promise.all([
+              nextState.legalContext.length > 0
+                ? Promise.resolve(nextState.legalContext)
+                : retrieveLegalContext(nextState),
+              buildNarrative(nextState),
+            ]);
+            nextState = { ...nextState, legalContext, narrative };
             const generated = await generateComplaintDraft(
               nextState,
               session.user.name ?? undefined
             );
-            replyText = generated.plainText;
-            nextState = { ...nextState, stage: "DRAFTED", draftVersion: nextState.draftVersion + 1 };
+            // Markdown, not the flat text: the chat renders markdown, and
+            // the flat version arrived as one unreadable paragraph.
+            replyText = generated.markdown;
+            nextState = {
+              ...nextState,
+              narrative: generated.narrative,
+              stage: "DRAFTED",
+              draftVersion: nextState.draftVersion + 1,
+            };
 
             await prisma.fIRDraft.update({
               where: { id: firDraftId },
@@ -324,7 +357,10 @@ export async function POST(req: NextRequest) {
         // What we already know about this person, from earlier
         // conversations. Loaded before the prompt is built so they never
         // have to re-explain their situation from scratch.
-        const memoryBlock = await buildMemoryBlock(userId);
+        // Started now, awaited after retrieval: the two are independent, and
+        // running them back to back added a DB round-trip to every reply —
+        // felt most in voice mode, where it is silence.
+        const memoryPromise = buildMemoryBlock(userId).catch(() => "");
 
         // ---- Small talk ----
         // "hi" should get a greeting, not a legal action plan with
@@ -349,8 +385,16 @@ export async function POST(req: NextRequest) {
               chunks: [] as Awaited<ReturnType<typeof retrieveRelevantChunks>>["chunks"],
               evidenceLevel: "INSUFFICIENT" as const,
             }
-          : await retrieveRelevantChunks(retrievalQuery);
+          : await retrieveRelevantChunks(retrievalQuery, {
+              // A spoken reply is at most four sentences and names one
+              // Act if any, so six chunks cannot all be used — they only
+              // lengthen the prompt, and prompt length is paid for in
+              // time-to-first-token, which a listener experiences as
+              // silence rather than as a progress bar.
+              ...(voice ? { topK: VOICE_TOP_K } : {}),
+            });
         const retrievalLatencyMs = Date.now() - retrievalStart;
+        const memoryBlock = await memoryPromise;
 
         const provider = await getAIProvider();
 
@@ -450,7 +494,14 @@ export async function POST(req: NextRequest) {
           // sentences") — the model stops on its own once it has said
           // that much, so a generous ceiling costs nothing in practice
           // and only removes the risk of a truncated legal answer.
-          maxTokens: mode === "case" ? 5000 : mode === "knowledge" ? 3500 : 3000,
+          //
+          // Revisited once reasoning was capped (reasoning_effort "low" on
+          // Groq, a fixed thinking budget on Gemini): the thinking overhead
+          // that made a small cap unsafe is now bounded, and a spoken reply
+          // (at most four sentences) fits easily in 1500. The smaller request
+          // also fits under Groq's free 8k tokens-per-minute cap, which a
+          // 5000-token voice request in Case mode did not.
+          maxTokens: voice ? 1500 : mode === "case" ? 5000 : mode === "knowledge" ? 3500 : 3000,
         })) {
           // Several fallbacks may be tried before one produces text; only
           // the provider that actually answers is worth telling the user.
@@ -477,8 +528,10 @@ export async function POST(req: NextRequest) {
             continue;
           }
 
-          answer += chunk.delta;
-          send("token", { delta: chunk.delta });
+          const delta = stripControlTokens(chunk.delta);
+          if (!delta) continue;
+          answer += delta;
+          send("token", { delta });
         }
 
         // The stream ended before the marker ever resolved (a very

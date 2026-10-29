@@ -16,6 +16,7 @@
 import OpenAI from "openai";
 import { withKeyRotation } from "./key-pool";
 import { getModelById } from "./models";
+import { AI_SDK_CLIENT_OPTIONS } from "./errors";
 import type {
   AIProvider,
   EmbeddingResult,
@@ -46,7 +47,7 @@ export class OpenAIProvider implements AIProvider {
   }
 
   private getClient(apiKey: string) {
-    return new OpenAI({ apiKey, baseURL: this.baseURL });
+    return new OpenAI({ apiKey, baseURL: this.baseURL, ...AI_SDK_CLIENT_OPTIONS });
   }
 
   async complete(options: LLMCompletionOptions): Promise<string> {

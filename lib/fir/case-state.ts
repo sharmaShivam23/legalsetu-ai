@@ -147,6 +147,10 @@ export interface FIRCaseState {
    *  intake. */
   skippedKeys: FactKey[];
   legalContext: LegalContextEntry[];
+  /** The model-written narrative of the last generated draft, kept so the
+   *  PDF reproduces exactly what the user reviewed instead of calling the
+   *  model again (slow, can fail, and can word things differently). */
+  narrative?: string;
   /** Set once the user has reviewed the summary and confirmed it. */
   confirmedAt?: string;
   /** Incremented on every edit so a PDF is never built from stale data. */

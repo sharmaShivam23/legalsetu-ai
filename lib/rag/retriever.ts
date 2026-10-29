@@ -12,6 +12,15 @@ import type {
 } from "./types";
 
 const TOP_K = 6;
+/** Floor and ceiling for a caller-supplied topK. */
+const MIN_TOP_K = 1;
+const MAX_TOP_K = 20;
+
+function resolveTopK(filters: RAGSearchFilters): number {
+  const requested = filters.topK;
+  if (typeof requested !== "number" || !Number.isFinite(requested)) return TOP_K;
+  return Math.min(MAX_TOP_K, Math.max(MIN_TOP_K, Math.round(requested)));
+}
 const MIN_SIMILARITY = 0.15;
 
 /** Short-lived cache of query embeddings — repeated/similar questions are common. */
@@ -132,7 +141,7 @@ async function vectorSearchSQL(
     LIMIT $2
     `,
     vectorLiteral,
-    TOP_K,
+    resolveTopK(filters),
     filters.jurisdiction ?? null,
     filters.language ?? null
   );
@@ -226,7 +235,7 @@ async function vectorSearchInMemory(
     });
   }
 
-  return scored.sort((a, b) => b.similarity - a.similarity).slice(0, TOP_K);
+  return scored.sort((a, b) => b.similarity - a.similarity).slice(0, resolveTopK(filters));
 }
 
 function computeEvidenceLevel(chunks: RetrievedChunk[]): EvidenceLevel {

@@ -104,6 +104,10 @@ export async function createProviderInstance(model: AIModel): Promise<AIProvider
       const { GroqProvider } = await import("./groq");
       return new GroqProvider(model.id);
     }
+    case "cerebras": {
+      const { CerebrasProvider } = await import("./cerebras");
+      return new CerebrasProvider(model.id);
+    }
     case "openrouter": {
       const { OpenRouterProvider } = await import("./openrouter");
       return new OpenRouterProvider(model.id);
@@ -126,6 +130,7 @@ async function hasKeysForProvider(providerName: string): Promise<boolean> {
     case "openai": prefix = "OPENAI_API_KEY"; break;
     case "anthropic": prefix = "ANTHROPIC_API_KEY"; break;
     case "groq": prefix = "GROQ_API_KEY"; break;
+    case "cerebras": prefix = "CEREBRAS_API_KEY"; break;
     case "openrouter": prefix = "OPENROUTER_API_KEY"; break;
     case "opencode": prefix = "OPENCODE_API_KEY"; break;
   }
@@ -215,7 +220,13 @@ export async function getEmbeddingProvider(): Promise<AIProvider> {
   const main = await getAIProvider();
 
   // If the active provider cannot embed (Groq, Anthropic, OpenRouter, OpenCode text-only), fallback to real embedders
-  if (main.name === "groq" || main.name === "anthropic" || main.name === "openrouter" || main.name === "opencode") {
+  if (
+    main.name === "groq" ||
+    main.name === "cerebras" ||
+    main.name === "anthropic" ||
+    main.name === "openrouter" ||
+    main.name === "opencode"
+  ) {
     if (await hasKeysForProvider("gemini")) {
       return createProviderInstance(getModelById("gemini-default"));
     }

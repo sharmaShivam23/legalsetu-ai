@@ -24,7 +24,20 @@ export class AIError extends Error {
   }
 }
 
-/** 
+/**
+ * Per-request ceiling for every vendor SDK client. The SDK defaults were
+ * a 10-minute timeout plus 2 automatic retries that honour a 429's
+ * `retry-after` header — so a rate-limited key sat waiting (often 30-60s)
+ * instead of failing fast and letting key rotation / provider fallback
+ * move on. That wait was the "very late response" users saw.
+ */
+export const AI_REQUEST_TIMEOUT_MS = Number(process.env.AI_REQUEST_TIMEOUT_MS) || 45_000;
+
+/** SDK-level retries are disabled: lib/ai/key-pool.ts and lib/ai/llm.ts
+ *  already retry, and they do it on a DIFFERENT key or provider. */
+export const AI_SDK_CLIENT_OPTIONS = { timeout: AI_REQUEST_TIMEOUT_MS, maxRetries: 0 } as const;
+
+/**
  * Returns a safe, user-friendly message for any error.
  * Never exposes raw API errors or keys to the frontend.
  */

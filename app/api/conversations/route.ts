@@ -14,6 +14,7 @@ import { prisma } from "@/lib/db/prisma";
 import { apiError, apiSuccess } from "@/lib/utils/api-response";
 import { checkRateLimit } from "@/lib/security/rate-limit";
 import { logger } from "@/lib/logging/logger";
+import { stripLeadingMarker } from "@/lib/rag/marker";
 
 export const runtime = "nodejs";
 
@@ -77,7 +78,7 @@ export async function GET(req: NextRequest) {
         createdAt: c.createdAt,
         updatedAt: c.updatedAt,
         messageCount: c._count.messages,
-        preview: c.messages[0]?.content.slice(0, 120) ?? "",
+        preview: stripLeadingMarker(c.messages[0]?.content ?? "").trim().slice(0, 120),
         mode: c.messages[0]?.mode ?? "quick",
       })),
       stats: {

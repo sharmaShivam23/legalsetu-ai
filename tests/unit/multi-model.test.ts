@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { getAIProvider, createProviderInstance } from "@/lib/ai/provider";
-import { getModelById } from "@/lib/ai/models";
+import { getModelById, getAutoFallbackSequence, DEFAULT_MODEL_ID } from "@/lib/ai/models";
 import { incrementAndCheckUsage } from "@/lib/ai/usage";
 import { withKeyRotation } from "@/lib/ai/key-pool";
 import { AIError } from "@/lib/ai/errors";
@@ -72,6 +72,38 @@ describe("Multi-Model AI Selector", () => {
 
   it("Scenario 10: Invalid modelId falls back gracefully", async () => {
     const model = getModelById("invalid-id");
-    expect(model.id).toBe("gemini-default"); // Falls back to default
+    expect(model.id).toBe(DEFAULT_MODEL_ID);
+  });
+
+  it("Scenario 11: an unset or auto modelId resolves to the default", async () => {
+    expect(getModelById(undefined).id).toBe(DEFAULT_MODEL_ID);
+    expect(getModelById(null).id).toBe(DEFAULT_MODEL_ID);
+    expect(getModelById("auto").id).toBe(DEFAULT_MODEL_ID);
+  });
+
+  it("Scenario 12: the fallback chain is ordered fastest-first", () => {
+    // Order here is latency, not prestige. Measured against this
+    // project's own free-tier accounts: Groq answers a trivial prompt
+    // in 400-800ms while Gemini takes 2.5-11s and intermittently
+    // returns 429/503. The chain used to start with Gemini and reach
+    // Groq fourth, so every request paid for the slow providers first.
+    // If someone reorders this, the demo gets slow again silently —
+    // hence a test rather than a comment.
+    const order = getAutoFallbackSequence().map((m) => m.id);
+
+    expect(order[0]).toBe("groq-default");
+    expect(order[1]).toBe("cerebras-default");
+
+    // Providers known to be out of credit or blocked must stay behind
+    // the ones that actually answer.
+    for (const slow of ["gemini-default", "openai-default", "anthropic-default"]) {
+      expect(order.indexOf(slow)).toBeGreaterThan(order.indexOf("groq-default"));
+    }
+
+    // Every id in the sequence must resolve to a real model, or the
+    // chain silently collapses onto the default.
+    for (const id of order) {
+      expect(getModelById(id).id).toBe(id);
+    }
   });
 });

@@ -1,35 +1,60 @@
 "use client";
 
 // ==========================================================
-// LegalSetu — Real-Time Bidirectional Voice Mode (ChatGPT-Style)
+// LegalSetu — Real-Time Bidirectional Voice Mode
 // ----------------------------------------------------------
-// Real-time continuous conversational loop:
-//   User speaks -> instant speech recognition / VAD detection
-//     -> streams through /api/chat/stream
-//     -> sentences synthesised and spoken aloud immediately
-//     -> auto-transitions back to listening for the next question.
+// One continuous loop:
+//   speak -> VAD detects the pause -> Sarvam transcribes
+//     -> /api/chat/stream answers -> each clause is spoken as
+//     it is written -> back to listening.
 //
-// Dual-engine speech architecture:
-//   - Input: Native browser Web Speech API (zero latency, real-time)
-//            with fallback to MediaRecorder + Sarvam STT.
-//   - Output: Sarvam Bulbul TTS with instant fallback to
-//             Browser Web Speech Synthesis (never fails silently).
-//   - Pre-unlocked audio to prevent browser autoplay blocks.
-//   - Smart echo protection preventing assistant self-interruption.
+// Input: microphone RMS drives a voice-activity detector; the
+// finished utterance is POSTed to /api/voice/stt, which calls
+// Sarvam Saaras server-side. Sarvam AUTO-DETECTS which of ~22
+// Indian languages was spoken, so someone browsing in English
+// can ask their question in Tamil and be understood.
+//
+// Output: Sarvam Bulbul, one clause at a time, synthesised
+// ahead of playback so speech starts while the answer is still
+// being generated.
+//
+// ----------------------------------------------------------
+// Why the browser's Web Speech API is NOT used here
+// ----------------------------------------------------------
+// It was, and it was the reason voice mode appeared to hang.
+// Three faults compounded:
+//
+//  1. The server-side fallback was unreachable. It ran under
+//     `if (!speechSupportedRef.current)`, but every Chromium
+//     browser defines webkitSpeechRecognition, so that branch
+//     was dead code. When recognition produced nothing — which
+//     it routinely does for Indian languages — the recorder
+//     kept running and NOTHING was ever sent. The UI sat in
+//     "Listening" indefinitely.
+//
+//  2. It listened in the wrong language. recognition.lang came
+//     from the INTERFACE language, so an English UI meant an
+//     en-IN recogniser trying to parse Hindi.
+//
+//  3. It does not exist in Firefox, and is unreliable in Safari.
+//
+// Sarvam handles all three: one path, every browser, language
+// detected from the audio instead of assumed from a setting.
 // ==========================================================
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Mic, MicOff, X, Loader2, AudioLines, AlertTriangle, Volume2 } from "lucide-react";
 import type { ChatMode } from "@/lib/rag/prompt";
 import { extractClauses, toSpeakable } from "@/lib/voice/speech-text";
-import { speechCodeFor } from "@/lib/i18n/languages";
+import { getLanguage, speechCodeFor, normalizeLanguage, DEFAULT_LANGUAGE } from "@/lib/i18n/languages";
+import { appLanguageFromSarvam } from "@/lib/i18n/sarvam-translate";
 
 type Phase = "starting" | "listening" | "transcribing" | "thinking" | "speaking" | "error";
 
 interface VoiceModeProps {
   open: boolean;
   onClose: () => void;
-  /** Interface language — the preferred voice for the reply. */
+  /** Interface language — the fallback voice when nothing is detected. */
   language: string;
   /** Reuses whichever chat mode the user already had selected. */
   mode: ChatMode;
@@ -42,16 +67,67 @@ interface VoiceModeProps {
 /** RMS above this counts as speech while the assistant is quiet. */
 const SPEECH_THRESHOLD = 0.035;
 /**
- * Higher bar while audio is playing. Only intentional loud speech directly
- * into the microphone triggers barge-in to avoid speaker acoustic feedback.
+ * Higher bar while audio is playing, so the assistant's own voice
+ * coming back through the speakers cannot interrupt it. Only deliberate,
+ * close-mic speech clears this.
  */
 const BARGE_THRESHOLD = 0.22;
-/** Silence duration after speech ends to finalize the utterance. */
-const SILENCE_MS = 600;
-/** Restart recorder interval to keep audio chunks manageable. */
+/** Silence after speech that ends the utterance. */
+const SILENCE_MS = 700;
+/** Restart an idle recorder periodically so its buffer cannot grow forever. */
 const IDLE_RESET_MS = 8_000;
-/** Ignore audio blips shorter than this (e.g. clicks, coughs). */
-const MIN_SPEECH_MS = 300;
+/** Ignore blips shorter than this: clicks, coughs, a chair moving. */
+const MIN_SPEECH_MS = 350;
+/**
+ * Force the utterance to end after this long, even if the speaker has
+ * not paused.
+ *
+ * Sarvam rejects anything over 30 seconds outright:
+ *   "Audio duration exceeds the maximum limit of 30 seconds."
+ * Without a cap the detector simply waits for a silence that may never
+ * come — someone speaking continuously, a television in the room, a
+ * fan near the microphone — and the whole clip is then thrown away with
+ * a 400. Cutting at 20s leaves headroom and turns "voice mode died" into
+ * "it answered the first twenty seconds", which is recoverable.
+ */
+const MAX_UTTERANCE_MS = 20_000;
+/**
+ * Hard ceiling on the RECORDED clip, measured from when the recorder
+ * started, not from when speech began. The clip includes any lead-in
+ * silence before the user spoke (up to IDLE_RESET_MS), so a cap measured
+ * from speech start alone could still produce a 28s+ file and hit
+ * Sarvam's 30s limit.
+ */
+const MAX_SEGMENT_MS = 25_000;
+/**
+ * Ignore microphone energy for this long after playback starts. Echo
+ * cancellation needs a moment to adapt, and without the grace period the
+ * first word the assistant speaks barges in on itself.
+ */
+const ECHO_GRACE_MS = 1_200;
+
+/**
+ * Clause length, in characters, for the FIRST thing said in a reply.
+ * Deliberately shorter than the default: the opening clause is the only
+ * one whose synthesis the listener waits on in silence, so it is worth
+ * splitting early even if it sounds slightly clipped. Every later clause
+ * is synthesised while the previous one plays, so length is free there.
+ */
+const FIRST_CLAUSE_CHARS = 24;
+/** Longest the first clip may grow before it is cut at a word break. */
+const FIRST_CLAUSE_MAX_CHARS = 60;
+
+/**
+ * Client-side ceiling for one synthesis request.
+ *
+ * This was 4s while lib/voice/sarvam.ts allowed the server 12s, so the
+ * client routinely gave up on a request the server was still completing,
+ * fell through to browser speech synthesis, and — on a machine with no
+ * Hindi voice installed — played nothing at all. Silence that the code
+ * counted as success. The two timeouts now agree, and the browser is
+ * only asked to speak when it actually has a voice for the language.
+ */
+const TTS_TIMEOUT_MS = 12_000;
 
 function pickMimeType(): string {
   const candidates = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg;codecs=opus"];
@@ -59,6 +135,16 @@ function pickMimeType(): string {
     if (typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported(type)) return type;
   }
   return "";
+}
+
+/** True when the browser actually has a voice that can read this language. */
+function hasBrowserVoiceFor(appLanguage: string): boolean {
+  if (typeof window === "undefined" || !("speechSynthesis" in window)) return false;
+  const voices = window.speechSynthesis.getVoices();
+  if (voices.length === 0) return false;
+  const tag = speechCodeFor(appLanguage);
+  const base = tag.split("-")[0];
+  return voices.some((v) => v.lang === tag || v.lang?.startsWith(base));
 }
 
 export function VoiceMode({
@@ -77,7 +163,8 @@ export function VoiceMode({
   const [answerText, setAnswerText] = useState("");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  /** History of previous voice turns for the mini-transcript. */
+  /** Language Sarvam heard, shown so the user can see they were understood. */
+  const [heardLanguage, setHeardLanguage] = useState<string | null>(null);
   const [turns, setTurns] = useState<{ user: string; assistant: string }[]>([]);
 
   // --- media plumbing ---
@@ -87,6 +174,7 @@ export function VoiceMode({
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const rafRef = useRef<number | null>(null);
+  const vadBufferRef = useRef<Float32Array | null>(null);
 
   // --- vad bookkeeping ---
   const heardSpeechRef = useRef(false);
@@ -97,24 +185,41 @@ export function VoiceMode({
   const phaseRef = useRef<Phase>("starting");
   const closingRef = useRef(false);
   const speakingStartedAtRef = useRef(0);
+  /** Gates the detector without tearing the recorder down. */
+  const listeningRef = useRef(true);
+  /** True between recorder.stop() and its onstop firing. */
+  const stoppingRef = useRef(false);
+  /**
+   * Discards whatever the recorder holds and starts a clean clip. Set
+   * once the segment helpers below exist; resumeListening calls it.
+   */
+  const restartSegmentRef = useRef<() => void>(() => {});
 
-  // --- speech recognition (Web Speech API) ---
-  const recognitionRef = useRef<any>(null);
-  const speechSupportedRef = useRef(false);
-  const accumulatedTranscriptRef = useRef("");
-  const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  /**
+   * The language Sarvam detected on the last utterance. Replies are
+   * spoken in the language the user actually spoke, not the one the
+   * interface happens to be set to.
+   */
+  const detectedLanguageRef = useRef<string | null>(null);
 
-  // --- speech output (dual audio ping-pong for gapless playback) ---
+  // --- speech output ---
   const audioElARef = useRef<HTMLAudioElement | null>(null);
   const audioElBRef = useRef<HTMLAudioElement | null>(null);
   const audioIdxRef = useRef(0);
-  const ttsQueueRef = useRef<string[]>([]);
+  /**
+   * Clips in playback order. `audio` is the in-flight synthesis promise,
+   * started the moment the clause was extracted — so clause N+1 is being
+   * synthesised while clause N is still playing, instead of after it.
+   */
+  const clipsRef = useRef<{ text: string; audio: Promise<string | null> }[]>([]);
   const pumpingRef = useRef(false);
   const cancelSpeechRef = useRef(false);
   const streamDoneRef = useRef(true);
-  const ttsAbortRef = useRef<AbortController | null>(null);
+  /** Every in-flight synthesis, so a barge-in can abort all of them. */
+  const ttsAbortsRef = useRef<Set<AbortController>>(new Set());
   const objectUrlsRef = useRef<string[]>([]);
   const ttsBlockedRef = useRef(false);
+  const warnedNoVoiceRef = useRef(false);
 
   // --- chat stream ---
   const chatAbortRef = useRef<AbortController | null>(null);
@@ -127,17 +232,61 @@ export function VoiceMode({
 
   mutedRef.current = muted;
 
+  /**
+   * The language to answer and speak in. A language the user CHOSE from
+   * the dropdown always wins — previously the detected language did, so
+   * someone who selected Hindi and said "Hello AI" was answered in
+   * English. Only on the default (English) setting, i.e. when no choice
+   * was made, does the reply follow whatever language was spoken.
+   */
+  const replyLanguage = useCallback(
+    () =>
+      normalizeLanguage(language) !== DEFAULT_LANGUAGE
+        ? language
+        : (detectedLanguageRef.current ?? language),
+    [language]
+  );
+
   // ---------------------------------------------------------------
-  // Browser Audio Unlocking (Fix Chrome/Edge Autoplay Blocks)
+  // Listening gate. Replaces the old pause/resumeRecognition pair:
+  // there is no recogniser to start and stop any more, only a flag
+  // the detector consults.
+  // ---------------------------------------------------------------
+  const pauseListening = useCallback(() => {
+    listeningRef.current = false;
+    heardSpeechRef.current = false;
+  }, []);
+
+  const resumeListening = useCallback(() => {
+    if (closingRef.current || mutedRef.current) return;
+    heardSpeechRef.current = false;
+    segmentStartedAtRef.current = performance.now();
+    lastVoiceAtRef.current = performance.now();
+    listeningRef.current = true;
+    // THE root cause of voice mode going dead after the first answer: the
+    // recorder kept running through transcription, thinking and the
+    // assistant's own spoken reply, so the next question was sent as one
+    // long clip — often past Sarvam's 30s limit (rejected with a 400, so
+    // nothing was heard or answered) and always containing the
+    // assistant's voice. Every listening turn now starts a fresh clip.
+    restartSegmentRef.current();
+  }, []);
+
+  // ---------------------------------------------------------------
+  // Browser audio unlocking (Chrome/Edge autoplay policy)
   // ---------------------------------------------------------------
   const unlockAudioPlayback = useCallback(() => {
     try {
       if (audioCtxRef.current && audioCtxRef.current.state === "suspended") {
         void audioCtxRef.current.resume();
       }
-      const silentWav = "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA";
+      const silentWav =
+        "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA";
+      // Only idle elements: this runs on EVERY tap on the overlay, and
+      // swapping the source of the element currently playing a reply cut
+      // that sentence off mid-word.
       for (const el of [audioElARef.current, audioElBRef.current]) {
-        if (el) {
+        if (el && (el.paused || el.ended) && phaseRef.current !== "speaking") {
           el.src = silentWav;
           el.play().catch(() => {});
         }
@@ -146,26 +295,45 @@ export function VoiceMode({
         window.speechSynthesis.resume();
       }
     } catch {
-      // Non-fatal
+      // Non-fatal.
     }
   }, []);
 
   // ---------------------------------------------------------------
-  // Speech output: Browser Speech Synthesis Fallback
+  // Speech output
   // ---------------------------------------------------------------
+  const releaseUrls = useCallback(() => {
+    objectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+    objectUrlsRef.current = [];
+  }, []);
+
+  /**
+   * Last-resort local synthesis. Only attempted when the browser really
+   * has a voice for the language: asking it to speak Hindi on a machine
+   * with no Hindi voice produces silence AND fires no error, which is
+   * indistinguishable from success and is exactly how voice mode used to
+   * "work" while saying nothing.
+   */
   const browserSpeak = useCallback(
-    (text: string): Promise<void> => {
+    (text: string, appLanguage: string): Promise<void> => {
       return new Promise((resolve) => {
-        if (typeof window === "undefined" || !("speechSynthesis" in window)) {
-          return resolve();
-        }
         const trimmed = text.trim();
         if (!trimmed) return resolve();
+
+        if (!hasBrowserVoiceFor(appLanguage)) {
+          if (!warnedNoVoiceRef.current) {
+            warnedNoVoiceRef.current = true;
+            setNotice(
+              `Speech for ${getLanguage(appLanguage).nativeName} is unavailable right now — the reply is shown as text below.`
+            );
+          }
+          return resolve();
+        }
 
         try {
           window.speechSynthesis.cancel();
           const utterance = new SpeechSynthesisUtterance(trimmed);
-          const speechLang = speechCodeFor(language);
+          const speechLang = speechCodeFor(appLanguage);
           utterance.lang = speechLang;
 
           const voices = window.speechSynthesis.getVoices();
@@ -185,11 +353,9 @@ export function VoiceMode({
               resolve();
             }
           };
-
           utterance.onend = done;
           utterance.onerror = done;
-
-          // Safety timeout in case browser TTS stalls
+          // Guard against a stalled synthesiser.
           setTimeout(done, Math.max(1500, trimmed.length * 100));
 
           window.speechSynthesis.speak(utterance);
@@ -198,37 +364,30 @@ export function VoiceMode({
         }
       });
     },
-    [language]
+    []
   );
 
-  // ---------------------------------------------------------------
-  // Speech output: Sarvam Cloud TTS (with timeout)
-  // ---------------------------------------------------------------
-  const releaseUrls = useCallback(() => {
-    objectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
-    objectUrlsRef.current = [];
-  }, []);
-
+  /** Synthesises one clause through Sarvam. Returns an object URL, or null. */
   const synth = useCallback(
-    async (text: string): Promise<string | null> => {
+    async (text: string, appLanguage: string): Promise<string | null> => {
       if (ttsBlockedRef.current) return null;
-      const controller = new AbortController();
-      ttsAbortRef.current = controller;
 
-      // 4-second timeout for TTS chunk to avoid lag
-      const timeoutId = setTimeout(() => controller.abort(), 4000);
+      const controller = new AbortController();
+      ttsAbortsRef.current.add(controller);
+      const timeoutId = setTimeout(() => controller.abort(), TTS_TIMEOUT_MS);
 
       try {
         const res = await fetch("/api/voice/speak", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           signal: controller.signal,
-          body: JSON.stringify({ text, language }),
+          body: JSON.stringify({ text, language: appLanguage }),
         });
-        clearTimeout(timeoutId);
 
         if (!res.ok) {
           const detail = await res.json().catch(() => null);
+          // No Sarvam voice can read this script (Urdu, for one). Stop
+          // asking for the rest of this answer.
           if (detail?.error?.code === "TTS_LANGUAGE_UNSUPPORTED") {
             ttsBlockedRef.current = true;
           }
@@ -240,130 +399,154 @@ export function VoiceMode({
         objectUrlsRef.current.push(url);
         return url;
       } catch {
-        clearTimeout(timeoutId);
         return null;
+      } finally {
+        clearTimeout(timeoutId);
+        ttsAbortsRef.current.delete(controller);
       }
     },
-    [language]
+    []
   );
 
-  /** Plays a URL on the next audio element in the ping-pong pair. */
+  /**
+   * Plays a URL on the next element of the ping-pong pair. Resolves true
+   * once it has actually played, false if the browser refused or the clip
+   * was unplayable — the caller then speaks the clause another way. This
+   * used to resolve the same in both cases, so a blocked autoplay meant
+   * the whole reply was silently skipped: "the assistant doesn't speak".
+   */
   const playUrl = useCallback((url: string) => {
-    return new Promise<void>((resolve) => {
+    return new Promise<boolean>((resolve) => {
       const el = audioIdxRef.current === 0 ? audioElARef.current : audioElBRef.current;
       audioIdxRef.current = audioIdxRef.current === 0 ? 1 : 0;
-      if (!el) return resolve();
+      if (!el) return resolve(false);
 
       let finished = false;
-      const finish = () => {
+      let started = false;
+      let watchdog: ReturnType<typeof setTimeout> | undefined;
+      const finish = (ok: boolean) => {
         if (finished) return;
         finished = true;
-        el.removeEventListener("ended", finish);
-        el.removeEventListener("error", finish);
-        resolve();
+        clearTimeout(watchdog);
+        el.removeEventListener("ended", onEnded);
+        el.removeEventListener("error", onError);
+        el.removeEventListener("loadedmetadata", onMeta);
+        resolve(ok);
+      };
+      const onEnded = () => finish(true);
+      const onError = () => finish(started);
+      // If "ended" never arrives (a stalled decoder, a device change),
+      // the conversation must not hang in "Speaking" forever.
+      const onMeta = () => {
+        const seconds = Number.isFinite(el.duration) ? el.duration : 20;
+        clearTimeout(watchdog);
+        watchdog = setTimeout(() => finish(true), seconds * 1000 + 1500);
       };
 
-      el.addEventListener("ended", finish);
-      el.addEventListener("error", finish);
+      el.addEventListener("ended", onEnded);
+      el.addEventListener("error", onError);
+      el.addEventListener("loadedmetadata", onMeta);
+      watchdog = setTimeout(() => finish(started), 30_000);
       el.src = url;
-
-      el.play().catch((err) => {
-        console.warn("Audio play failed, proceeding:", err);
-        finish();
-      });
+      el.play()
+        .then(() => {
+          started = true;
+        })
+        .catch(() => {
+          setNotice("Tap anywhere on this screen to turn on the assistant's voice.");
+          finish(false);
+        });
     });
   }, []);
 
-  // ---------------------------------------------------------------
-  // Speech Queue Pump: Gapless Spoken Playback with Fallback
-  // ---------------------------------------------------------------
+  /** Plays queued clips in order, awaiting each one's pending synthesis. */
   const pump = useCallback(async () => {
     if (pumpingRef.current) return;
     pumpingRef.current = true;
 
     try {
       while (!cancelSpeechRef.current) {
-        const next = ttsQueueRef.current.shift();
-        if (!next) break;
+        const clip = clipsRef.current.shift();
+        if (!clip) break;
 
         if (phaseRef.current !== "speaking") {
           setPhaseSafe("speaking");
           speakingStartedAtRef.current = performance.now();
         }
 
-        // Try Sarvam TTS first, fallback immediately to local Web Speech Synthesis
-        let played = false;
-        try {
-          const url = await synth(next);
-          if (url && !cancelSpeechRef.current) {
-            await playUrl(url);
-            played = true;
-          }
-        } catch {
-          played = false;
-        }
+        const url = await clip.audio;
+        if (cancelSpeechRef.current) break;
 
-        if (!played && !cancelSpeechRef.current) {
-          await browserSpeak(next);
-        }
+        const played = url ? await playUrl(url) : false;
+        if (!played && !cancelSpeechRef.current) await browserSpeak(clip.text, replyLanguage());
       }
     } finally {
       pumpingRef.current = false;
-      // When generation is done and speech queue is empty:
-      // AUTOMATICALLY TRANSITION BACK TO LISTENING (ChatGPT loop)!
-      if (!cancelSpeechRef.current && streamDoneRef.current && ttsQueueRef.current.length === 0) {
+      // Generation finished and nothing left to say: listen again.
+      if (!cancelSpeechRef.current && streamDoneRef.current && clipsRef.current.length === 0) {
         setPhaseSafe("listening");
-        resumeRecognition();
+        resumeListening();
       }
     }
-  }, [browserSpeak, playUrl, setPhaseSafe, synth]);
+  }, [browserSpeak, playUrl, replyLanguage, resumeListening, setPhaseSafe]);
 
+  /**
+   * Queues one clause. Synthesis starts immediately rather than when the
+   * clause reaches the front of the queue, so the network round-trip for
+   * the next clause overlaps the playback of the current one.
+   */
   const enqueueSpeech = useCallback(
     (sentence: string) => {
       const clean = sentence.trim();
       if (!clean) return;
-      ttsQueueRef.current.push(clean);
+      clipsRef.current.push({ text: clean, audio: synth(clean, replyLanguage()) });
       void pump();
     },
-    [pump]
+    [pump, replyLanguage, synth]
   );
 
   const cancelSpeech = useCallback(() => {
     cancelSpeechRef.current = true;
-    ttsQueueRef.current = [];
-    ttsAbortRef.current?.abort();
+    clipsRef.current = [];
+
+    for (const controller of ttsAbortsRef.current) controller.abort();
+    ttsAbortsRef.current.clear();
 
     if (typeof window !== "undefined" && "speechSynthesis" in window) {
       try {
         window.speechSynthesis.cancel();
-      } catch {}
+      } catch {
+        // Safari throws if synthesis was never started. Nothing to undo.
+      }
     }
 
     for (const el of [audioElARef.current, audioElBRef.current]) {
       if (el) {
         el.pause();
         el.removeAttribute("src");
-        try { el.load(); } catch {}
+        try {
+          el.load();
+        } catch {
+          // Resetting a never-loaded element is not an error worth raising.
+        }
       }
     }
     releaseUrls();
   }, [releaseUrls]);
 
   // ---------------------------------------------------------------
-  // Real-Time Chat Turn Execution
+  // One conversational turn
   // ---------------------------------------------------------------
   const runVoiceTurn = useCallback(
     async (question: string) => {
       const trimmed = question.trim();
       if (!trimmed) {
         setPhaseSafe("listening");
-        resumeRecognition();
+        resumeListening();
         return;
       }
 
-      // Stop recognition while thinking and speaking
-      pauseRecognition();
-
+      pauseListening();
       setPhaseSafe("thinking");
       setAnswerText("");
       spokenTailRef.current = "";
@@ -381,7 +564,8 @@ export function VoiceMode({
           signal: controller.signal,
           body: JSON.stringify({
             content: trimmed,
-            language,
+            // Answer in the language that was spoken.
+            language: replyLanguage(),
             mode,
             modelId,
             voice: true,
@@ -425,11 +609,16 @@ export function VoiceMode({
               answer += payload.delta ?? "";
               setAnswerText(answer);
 
-              // Extract clauses for earliest possible speech output
+              // Speak each clause as soon as it is complete.
               const speakable = toSpeakable(answer);
               if (speakable.length > spokenTailRef.current.length) {
                 const fresh = speakable.slice(spokenTailRef.current.length);
-                const { sentences, rest } = extractClauses(fresh);
+                const isFirst = clipsRef.current.length === 0 && spokenTailRef.current === "";
+                const { sentences, rest } = extractClauses(
+                  fresh,
+                  isFirst ? FIRST_CLAUSE_CHARS : undefined,
+                  isFirst ? FIRST_CLAUSE_MAX_CHARS : undefined
+                );
                 if (sentences.length) {
                   sentences.forEach(enqueueSpeech);
                   spokenTailRef.current = speakable.slice(0, speakable.length - rest.length);
@@ -443,12 +632,10 @@ export function VoiceMode({
           }
         }
 
-        // Deliver leftover text
         const finalSpeakable = toSpeakable(answer);
         const leftover = finalSpeakable.slice(spokenTailRef.current.length).trim();
         if (leftover) enqueueSpeech(leftover);
 
-        // Update transcript history
         setTurns((prev) => [...prev, { user: trimmed, assistant: answer }]);
         onTurn(trimmed, answer, newConversationId);
       } catch (err: any) {
@@ -460,127 +647,34 @@ export function VoiceMode({
         streamDoneRef.current = true;
       }
 
-      if (!pumpingRef.current && ttsQueueRef.current.length === 0) {
+      if (!pumpingRef.current && clipsRef.current.length === 0) {
         setPhaseSafe("listening");
-        resumeRecognition();
+        resumeListening();
       } else {
         void pump();
       }
     },
-    [conversationId, enqueueSpeech, language, mode, modelId, onTurn, pump, setPhaseSafe]
+    [
+      conversationId,
+      enqueueSpeech,
+      mode,
+      modelId,
+      onTurn,
+      pauseListening,
+      pump,
+      replyLanguage,
+      resumeListening,
+      setPhaseSafe,
+    ]
   );
 
   // ---------------------------------------------------------------
-  // Web Speech API: Real-Time Instant Recognition
-  // ---------------------------------------------------------------
-  const pauseRecognition = useCallback(() => {
-    if (silenceTimerRef.current) {
-      clearTimeout(silenceTimerRef.current);
-      silenceTimerRef.current = null;
-    }
-    if (recognitionRef.current) {
-      try {
-        recognitionRef.current.abort();
-      } catch {}
-    }
-  }, []);
-
-  const resumeRecognition = useCallback(() => {
-    if (closingRef.current || mutedRef.current) return;
-    if (phaseRef.current === "speaking" || phaseRef.current === "thinking") return;
-
-    if (recognitionRef.current && speechSupportedRef.current) {
-      try {
-        recognitionRef.current.start();
-      } catch {
-        // Already active
-      }
-    }
-  }, []);
-
-  const initWebSpeech = useCallback(() => {
-    if (typeof window === "undefined") return;
-    const SpeechConstructor = (window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition;
-
-    if (!SpeechConstructor) {
-      speechSupportedRef.current = false;
-      return;
-    }
-
-    speechSupportedRef.current = true;
-    const recognition = new SpeechConstructor();
-    recognition.lang = speechCodeFor(language);
-    recognition.continuous = true;
-    recognition.interimResults = true;
-
-    recognition.onresult = (event: any) => {
-      if (mutedRef.current || phaseRef.current === "speaking" || phaseRef.current === "thinking") return;
-
-      let interim = "";
-      let final = "";
-
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        const res = event.results[i];
-        if (res.isFinal) final += res[0].transcript;
-        else interim += res[0].transcript;
-      }
-
-      if (final) {
-        accumulatedTranscriptRef.current += (accumulatedTranscriptRef.current ? " " : "") + final.trim();
-        setUserText(accumulatedTranscriptRef.current);
-
-        // Immediate dispatch after final phrase pause
-        if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-        silenceTimerRef.current = setTimeout(() => {
-          const query = accumulatedTranscriptRef.current.trim();
-          accumulatedTranscriptRef.current = "";
-          if (query) {
-            void runVoiceTurn(query);
-          }
-        }, 500);
-      } else if (interim) {
-        const liveText = (accumulatedTranscriptRef.current ? accumulatedTranscriptRef.current + " " : "") + interim;
-        setUserText(liveText);
-
-        // Reset silence timer on interim speech
-        if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-        silenceTimerRef.current = setTimeout(() => {
-          const query = liveText.trim();
-          accumulatedTranscriptRef.current = "";
-          if (query) {
-            void runVoiceTurn(query);
-          }
-        }, 900);
-      }
-    };
-
-    recognition.onerror = (event: any) => {
-      // Ignore routine aborts/no-speech
-      if (event.error === "no-speech" || event.error === "aborted") return;
-      console.warn("Speech recognition notice:", event.error);
-    };
-
-    recognition.onend = () => {
-      // Automatically keep recognition alive if in listening phase
-      if (!closingRef.current && !mutedRef.current && phaseRef.current === "listening") {
-        try {
-          recognition.start();
-        } catch {}
-      }
-    };
-
-    recognitionRef.current = recognition;
-    try {
-      recognition.start();
-    } catch {}
-  }, [language, runVoiceTurn]);
-
-  // ---------------------------------------------------------------
-  // Server-Side STT Fallback via MediaRecorder (for non-WebSpeech browsers)
+  // Transcription
   // ---------------------------------------------------------------
   const handleUtterance = useCallback(
     async (blob: Blob) => {
       if (closingRef.current) return;
+      pauseListening();
       setPhaseSafe("transcribing");
 
       try {
@@ -590,9 +684,16 @@ export function VoiceMode({
         const json = await res.json().catch(() => null);
 
         if (!res.ok) {
-          const message = json?.error?.message ?? "Could not transcribe that.";
-          setNotice(message);
+          setNotice(json?.error?.message ?? "Could not transcribe that.");
           setPhaseSafe("listening");
+          resumeListening();
+          return;
+        }
+
+        // Too short to be speech — keep listening, say nothing.
+        if (json?.data?.tooShort) {
+          setPhaseSafe("listening");
+          resumeListening();
           return;
         }
 
@@ -600,7 +701,19 @@ export function VoiceMode({
         if (!transcript) {
           setNotice("I didn't catch that — please say it again.");
           setPhaseSafe("listening");
+          resumeListening();
           return;
+        }
+
+        // Answer and speak in the language that was actually spoken.
+        const detected = appLanguageFromSarvam(json?.data?.languageCode);
+        if (detected) {
+          detectedLanguageRef.current = detected;
+          setHeardLanguage(getLanguage(detected).nativeName);
+          // A different language means a different voice; allow Sarvam
+          // TTS to be retried even if it was blocked for the last one.
+          ttsBlockedRef.current = false;
+          warnedNoVoiceRef.current = false;
         }
 
         setNotice(null);
@@ -609,11 +722,20 @@ export function VoiceMode({
       } catch {
         setNotice("Network connection problem.");
         setPhaseSafe("listening");
+        resumeListening();
       }
     },
-    [runVoiceTurn, setPhaseSafe]
+    [pauseListening, resumeListening, runVoiceTurn, setPhaseSafe]
   );
 
+  // ---------------------------------------------------------------
+  // Recording segments
+  //
+  // The recorder runs continuously and is only *sent* when the detector
+  // saw real speech. Starting it on detection instead would clip the
+  // first syllable, and a webm/opus stream cannot be sliced after the
+  // fact because only its first chunk carries the header.
+  // ---------------------------------------------------------------
   const startSegment = useCallback(() => {
     const stream = streamRef.current;
     if (!stream || closingRef.current) return;
@@ -647,31 +769,51 @@ export function VoiceMode({
         heardSpeechRef.current &&
         performance.now() - speechStartedAtRef.current >= MIN_SPEECH_MS;
       const type = recorder.mimeType || "audio/webm";
+      stoppingRef.current = true;
 
       recorder.onstop = () => {
+        stoppingRef.current = false;
         const blob = new Blob(chunksRef.current, { type });
         chunksRef.current = [];
         if (send && spokeLongEnough && !closingRef.current) {
           void handleUtterance(blob);
         }
+        // Always line up the next segment; handleUtterance gates the mic
+        // itself while it works, and resumeListening restarts it cleanly.
         if (!closingRef.current) startSegment();
       };
 
       try {
         recorder.stop();
-      } catch {}
+      } catch {
+        // Already inactive: the segment is over either way.
+        stoppingRef.current = false;
+      }
     },
     [handleUtterance, startSegment]
   );
 
+  restartSegmentRef.current = () => {
+    if (closingRef.current || !streamRef.current) return;
+    if (recorderRef.current) finishSegment(false);
+    // A stop already in flight will start the next segment in its onstop.
+    else if (!stoppingRef.current) startSegment();
+  };
+
   // ---------------------------------------------------------------
-  // Voice Activity Detection & Audio Visualizer
+  // Voice-activity detection + level meter
   // ---------------------------------------------------------------
   const tick = useCallback(() => {
     const analyser = analyserRef.current;
     if (!analyser || closingRef.current) return;
 
-    const buffer = new Float32Array(analyser.fftSize);
+    // Allocated once: a new Float32Array every animation frame is ~60
+    // throwaway buffers a second for the whole call.
+    let buffer = vadBufferRef.current;
+    if (!buffer || buffer.length !== analyser.fftSize) {
+      buffer = new Float32Array(analyser.fftSize);
+      vadBufferRef.current = buffer;
+    }
     analyser.getFloatTimeDomainData(buffer);
 
     let sum = 0;
@@ -683,23 +825,29 @@ export function VoiceMode({
     const now = performance.now();
     const current = phaseRef.current;
 
-    // VAD handling when WebSpeech is not active or as secondary VAD
     if (!mutedRef.current) {
       if (current === "speaking") {
-        // Smart Echo Suppression:
-        // Ignore microphone energy during the first 1200ms of assistant speaking
-        const speakingAge = now - speakingStartedAtRef.current;
-        if (speakingAge > 1200 && rms > BARGE_THRESHOLD) {
-          // Intentional loud user barge-in detected!
+        // Barge-in: deliberate, loud speech over the assistant.
+        if (now - speakingStartedAtRef.current > ECHO_GRACE_MS && rms > BARGE_THRESHOLD) {
           cancelSpeech();
           chatAbortRef.current?.abort();
           streamDoneRef.current = true;
           setPhaseSafe("listening");
-          resumeRecognition();
+          resumeListening();
         }
-      } else if (current === "listening" && !speechSupportedRef.current) {
-        // Fallback VAD for browsers without native WebSpeech
-        if (rms > SPEECH_THRESHOLD) {
+      } else if (current === "listening" && listeningRef.current) {
+        // The condition above used to be `!speechSupportedRef.current`,
+        // which is false in every Chromium browser — so this detector
+        // never ran there and no utterance was ever sent.
+        if (
+          heardSpeechRef.current &&
+          (now - speechStartedAtRef.current > MAX_UTTERANCE_MS ||
+            now - segmentStartedAtRef.current > MAX_SEGMENT_MS)
+        ) {
+          // Speaking without a pause for longer than Sarvam will accept.
+          // Cut here rather than let the clip grow until it is refused.
+          finishSegment(true);
+        } else if (rms > SPEECH_THRESHOLD) {
           if (!heardSpeechRef.current) {
             heardSpeechRef.current = true;
             speechStartedAtRef.current = now;
@@ -709,39 +857,44 @@ export function VoiceMode({
           finishSegment(true);
         } else if (!heardSpeechRef.current && now - segmentStartedAtRef.current > IDLE_RESET_MS) {
           finishSegment(false);
-          startSegment();
         }
       }
     }
 
-    rafRef.current = requestAnimationFrame(tick);
-  }, [cancelSpeech, finishSegment, resumeRecognition, setPhaseSafe, startSegment]);
+  }, [cancelSpeech, finishSegment, resumeListening, setPhaseSafe]);
+
+  /**
+   * `tick` is re-created whenever anything it transitively closes over
+   * changes — and through finishSegment -> handleUtterance ->
+   * runVoiceTurn that includes `conversationId` and the parent's
+   * `onTurn`. Naming it directly as a dependency of the lifecycle effect
+   * below therefore tore the microphone down and rebuilt it the moment
+   * the first spoken turn completed and a conversation id came back,
+   * mid-answer. Holding it in a ref lets the effect depend only on
+   * stable values while each frame still runs the newest closure.
+   */
+  const tickRef = useRef(tick);
+  tickRef.current = tick;
 
   // ---------------------------------------------------------------
-  // Lifecycle Management
+  // Lifecycle
   // ---------------------------------------------------------------
   const teardown = useCallback(() => {
     closingRef.current = true;
+    listeningRef.current = false;
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
     rafRef.current = null;
 
-    if (silenceTimerRef.current) {
-      clearTimeout(silenceTimerRef.current);
-      silenceTimerRef.current = null;
-    }
-
-    pauseRecognition();
-    recognitionRef.current = null;
-
     chatAbortRef.current?.abort();
-    ttsAbortRef.current?.abort();
-    ttsQueueRef.current = [];
     cancelSpeech();
 
     try {
       recorderRef.current?.stop();
-    } catch {}
+    } catch {
+      // Tearing down a recorder that already stopped is fine.
+    }
     recorderRef.current = null;
+    chunksRef.current = [];
 
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
@@ -749,7 +902,8 @@ export function VoiceMode({
     void audioCtxRef.current?.close().catch(() => {});
     audioCtxRef.current = null;
     analyserRef.current = null;
-  }, [cancelSpeech, pauseRecognition]);
+    vadBufferRef.current = null;
+  }, [cancelSpeech]);
 
   useEffect(() => {
     if (!open) return;
@@ -758,11 +912,16 @@ export function VoiceMode({
     cancelSpeechRef.current = false;
     streamDoneRef.current = true;
     ttsBlockedRef.current = false;
+    warnedNoVoiceRef.current = false;
+    detectedLanguageRef.current = null;
     audioIdxRef.current = 0;
+    clipsRef.current = [];
+    listeningRef.current = true;
     setErrorMessage(null);
     setNotice(null);
     setUserText("");
     setAnswerText("");
+    setHeardLanguage(null);
     setTurns([]);
     setPhaseSafe("starting");
 
@@ -770,8 +929,13 @@ export function VoiceMode({
 
     (async () => {
       try {
-        // Unlock audio system immediately upon opening
         unlockAudioPlayback();
+
+        // Some browsers only populate the voice list asynchronously; ask
+        // early so hasBrowserVoiceFor has something to inspect later.
+        if (typeof window !== "undefined" && "speechSynthesis" in window) {
+          window.speechSynthesis.getVoices();
+        }
 
         const stream = await navigator.mediaDevices.getUserMedia({
           audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
@@ -797,14 +961,16 @@ export function VoiceMode({
 
         setPhaseSafe("listening");
         lastVoiceAtRef.current = performance.now();
+        segmentStartedAtRef.current = performance.now();
 
-        // Initialize Web Speech Recognition
-        initWebSpeech();
-
-        // Start fallback MediaRecorder segment if WebSpeech isn't present
         startSegment();
 
-        rafRef.current = requestAnimationFrame(tick);
+        const frame = () => {
+          if (closingRef.current) return;
+          tickRef.current();
+          rafRef.current = requestAnimationFrame(frame);
+        };
+        rafRef.current = requestAnimationFrame(frame);
       } catch (err: any) {
         const denied = err?.name === "NotAllowedError" || err?.name === "SecurityError";
         setErrorMessage(
@@ -820,7 +986,7 @@ export function VoiceMode({
       cancelled = true;
       teardown();
     };
-  }, [initWebSpeech, open, setPhaseSafe, startSegment, teardown, tick, unlockAudioPlayback]);
+  }, [open, setPhaseSafe, startSegment, teardown, unlockAudioPlayback]);
 
   // Keyboard shortcuts (Esc, M)
   useEffect(() => {
@@ -832,15 +998,15 @@ export function VoiceMode({
       } else if (e.key.toLowerCase() === "m" && !e.metaKey && !e.ctrlKey) {
         setMuted((m) => {
           const next = !m;
-          if (next) pauseRecognition();
-          else resumeRecognition();
+          if (next) pauseListening();
+          else resumeListening();
           return next;
         });
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose, pauseRecognition, resumeRecognition]);
+  }, [open, onClose, pauseListening, resumeListening]);
 
   if (!open) return null;
 
@@ -860,6 +1026,14 @@ export function VoiceMode({
               : "Voice mode stopped";
 
   const orbScale = 1 + (phase === "listening" && !muted ? level * 0.45 : phase === "speaking" ? 0.18 : 0);
+
+  const interrupt = () => {
+    cancelSpeech();
+    chatAbortRef.current?.abort();
+    streamDoneRef.current = true;
+    setPhaseSafe("listening");
+    resumeListening();
+  };
 
   return (
     <div
@@ -927,11 +1101,7 @@ export function VoiceMode({
               className="relative flex h-52 w-52 cursor-pointer items-center justify-center sm:h-64 sm:w-64"
               onClick={() => {
                 unlockAudioPlayback();
-                if (phase === "speaking") {
-                  cancelSpeech();
-                  setPhaseSafe("listening");
-                  resumeRecognition();
-                }
+                if (phase === "speaking") interrupt();
               }}
               title={phase === "speaking" ? "Click to interrupt" : undefined}
             >
@@ -985,6 +1155,13 @@ export function VoiceMode({
                 {statusLabel}
               </p>
 
+              {heardLanguage && (
+                <p className="mt-1.5 text-[11px] text-slate-500">
+                  Heard <span className="font-semibold text-slate-300">{heardLanguage}</span> — replying in{" "}
+                  <span className="font-semibold text-slate-300">{getLanguage(replyLanguage()).nativeName}</span>
+                </p>
+              )}
+
               {notice && (
                 <p className="mx-auto mt-3 max-w-md rounded-xl border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
                   {notice}
@@ -1034,8 +1211,8 @@ export function VoiceMode({
               unlockAudioPlayback();
               setMuted((m) => {
                 const next = !m;
-                if (next) pauseRecognition();
-                else resumeRecognition();
+                if (next) pauseListening();
+                else resumeListening();
                 return next;
               });
             }}
@@ -1064,11 +1241,7 @@ export function VoiceMode({
           {phase === "speaking" && (
             <button
               type="button"
-              onClick={() => {
-                cancelSpeech();
-                setPhaseSafe("listening");
-                resumeRecognition();
-              }}
+              onClick={interrupt}
               aria-label="Interrupt speaking"
               title="Interrupt and speak"
               className="flex h-14 w-14 items-center justify-center rounded-full border border-emerald-500/40 bg-emerald-500/20 text-emerald-300 transition-all hover:scale-105 hover:bg-emerald-500/30"

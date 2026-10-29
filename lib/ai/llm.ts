@@ -60,6 +60,51 @@ function isTransientError(err: unknown): boolean {
 
 const TRANSIENT_RETRY_DELAY_MS = 1200;
 
+/**
+ * How long a stream may stay silent before its first token. A provider
+ * that accepted the request but is queueing it (free tiers do this under
+ * load) otherwise holds the user on a spinner until the route's own
+ * timeout kills the whole answer. Past this, the next provider is tried.
+ */
+const FIRST_TOKEN_TIMEOUT_MS = Number(process.env.AI_FIRST_TOKEN_TIMEOUT_MS) || 20_000;
+
+/**
+ * Re-yields `source`, but fails with a timeout error (which isTransientError
+ * recognises) if no text has arrived within FIRST_TOKEN_TIMEOUT_MS. Once the
+ * first text chunk is through, the stream runs unguarded.
+ */
+async function* withFirstTokenTimeout<T extends { delta: string }>(
+  source: AsyncGenerator<T>
+): AsyncGenerator<T> {
+  const deadline = Date.now() + FIRST_TOKEN_TIMEOUT_MS;
+  let gotText = false;
+  while (true) {
+    let next: IteratorResult<T>;
+    if (gotText) {
+      next = await source.next();
+    } else {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error("timeout: no response from the model")),
+          Math.max(0, deadline - Date.now())
+        );
+      });
+      try {
+        next = await Promise.race([source.next(), timeout]);
+      } catch (err) {
+        void source.return?.(undefined as never).catch(() => {});
+        throw err;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+    if (next.done) return;
+    if (next.value.delta) gotText = true;
+    yield next.value;
+  }
+}
+
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
@@ -170,7 +215,7 @@ export async function* streamCompletion(
 
   try {
     if (isProviderBenched(provider.name)) throw benchedError(provider.name);
-    for await (const chunk of provider.streamComplete({ messages, ...opts })) {
+    for await (const chunk of withFirstTokenTimeout(provider.streamComplete({ messages, ...opts }))) {
       if (chunk.delta) emittedAnything = true;
       yield chunk;
     }
@@ -178,7 +223,11 @@ export async function* streamCompletion(
   } catch (err) {
     if (emittedAnything) throw err;
 
-    if (isTransientError(err)) {
+    // A provider that stayed silent past the first-token deadline already
+    // cost the user 20s; retrying it would double that. Move on instead.
+    const wentSilent = String((err as any)?.message ?? err).includes("no response from the model");
+
+    if (isTransientError(err) && !wentSilent) {
       logger.warn("AI provider hit a transient error, retrying the stream", {
         provider: provider.name,
         errorType: String(err).slice(0, 160),
@@ -187,7 +236,7 @@ export async function* streamCompletion(
 
       let retryEmitted = false;
       try {
-        for await (const chunk of provider.streamComplete({ messages, ...opts })) {
+        for await (const chunk of withFirstTokenTimeout(provider.streamComplete({ messages, ...opts }))) {
           if (chunk.delta) retryEmitted = true;
           yield chunk;
         }
@@ -208,7 +257,7 @@ export async function* streamCompletion(
         // Tell the caller a different provider is answering, so the user
         // who picked a model isn't silently handed another one.
         yield { delta: "", done: false, servedBy: fallback.name };
-        for await (const chunk of fallback.streamComplete({ messages, ...opts })) {
+        for await (const chunk of withFirstTokenTimeout(fallback.streamComplete({ messages, ...opts }))) {
           if (chunk.delta) fallbackEmitted = true;
           yield chunk;
         }

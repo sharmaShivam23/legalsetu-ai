@@ -90,7 +90,7 @@ LANGUAGE REQUIREMENT (MANDATORY — THIS OVERRIDES EVERY OTHER FORMATTING RULE):
 - Write your ENTIRE response in ${target}, including every heading, table header, table cell, flowchart node label, and the disclaimer.
 - THE MARKDOWN HEADINGS THEMSELVES MUST BE TRANSLATED. Do not write "## Answer" or "## Do this now" in English — write the natural ${target} equivalent of each heading instead. The same applies to the table's column headers. An answer whose body is ${target} but whose headings are English is WRONG.
 - Use simple, everyday ${target} that a person with no legal training can follow. Avoid heavy Sanskritised or bureaucratic vocabulary.
-- Keep these in their ORIGINAL form, never translated or transliterated: statute names and abbreviations (BNS, BNSS, IPC, CrPC), section numbers, case names, official act titles, court names, URLs, and the name "LegalSetu".
+- Keep these in their ORIGINAL form, never translated or transliterated: the control line ${ASK_MARKER} / ${REPORT_MARKER} if one is required, statute names and abbreviations (BNS, BNSS, IPC, CrPC), section numbers, case names, official act titles, court names, URLs, and the name "LegalSetu".
 - Exception: Mermaid flowchart syntax itself (the words "flowchart", "TD", node connectors like -->, and the |Yes|/|No| edge labels) MUST stay in English — only the node LABEL TEXT inside [ ] or { } should be in ${target}. A mixed-language diagram that still parses is correct; a diagram that fails to parse is not.
 - If you must use an English legal term because no common equivalent exists, write it in English and add a short ${target} explanation in brackets.
 - Do not add a translation of your own answer, and do not mention that you were asked to use ${target}.`;
@@ -181,10 +181,40 @@ One line stating plainly whether this answer came from LegalSetu's verified libr
 ${MERMAID_RULES}`
       : "";
 
+  // Case mode is the one place the user has given a full history, so the
+  // report must EVALUATE it — not just hand back the same generic plan a
+  // Quick Answer would. Without this section the "analysis" was an action
+  // list that never said how well their facts actually fit the law.
+  const caseAssessment =
+    kind === "case"
+      ? `
+
+## Your case at a glance
+A short bullet list of the facts you gathered in the intake: what happened, when, where, who is involved, evidence they hold, steps already taken, what they want. Write "Not yet known" for anything still missing — never fill a gap with a guess.
+
+## Case assessment
+A markdown table that tests their facts against the law, one row per legal requirement:
+
+| What must be shown | What your facts show | Status |
+|--------------------|----------------------|--------|
+
+- "What must be shown" is each ingredient/condition of the relevant provision(s) from the RETRIEVED LEGAL DATA (e.g. "dishonest intention", "property moved without consent", "complaint within limitation"). If nothing relevant was retrieved, use the general practical requirements of the remedy instead and say so.
+- "What your facts show" points to the user's own specific facts from the intake.
+- "Status" is exactly one of: ✅ Supported, ⚠️ Partly / needs proof, ❌ Missing.
+Keep 3 to 6 rows, every cell under 15 words.
+
+Then three short bullet lists:
+**Strengths** — the facts and evidence that help them most.
+**Weak points and gaps** — missing evidence, delay, inconsistencies, and the explanation the other side is most likely to give. Be honest; a person acting on false confidence is harmed by it.
+**Evidence to secure now** — specific documents, records or witnesses that would close the gaps above.
+
+Finish with one line: **Overall footing:** Strong, Moderate, or Weak — followed by a one-sentence reason grounded in the table. This rates how well-supported their position is on the facts given; it is NOT a prediction of what a court or the police will decide, and must not be phrased as one.`
+      : "";
+
   return `ANSWER FORMAT — follow this exact structure, using these headings:
 
 ## Answer
-Two to four sentences. What their situation means in plain language and what the law allows them to do. Answer the actual question first.
+Two to four sentences. What their situation means in plain language and what the law allows them to do. Answer the actual question first.${caseAssessment}
 
 ## Do this now
 The 2 to 4 most urgent things, as a bullet list, most time-critical first. Start each with a verb. Include anything time-sensitive (preserving evidence, medical examination, deadlines). If something must happen within a time limit, say the limit.
@@ -299,6 +329,7 @@ Your reply must begin with EXACTLY ONE of these two lines, and nothing before it
   ${ASK_MARKER}
   ${REPORT_MARKER}
 Nothing else may appear on that first line. Never mention these markers to the user or explain what they mean.
+Write the marker EXACTLY as shown above — the two @ signs, the English word in CAPITAL letters, the two @ signs — even when the rest of your reply is in another language. Never translate it, transliterate it, or change its case: "@@आस्क" or "@@Ask" is WRONG.
 
 ${INTAKE_CHECKLIST}
 
@@ -337,6 +368,21 @@ export function buildSystemPrompt(
   return buildCasePrompt(language, intake, voice);
 }
 
+/**
+ * Longest a single retrieved section may be inside the prompt. Some
+ * corpus chunks run past 3,600 characters; six of those used most of a
+ * free-tier provider's 8k tokens-per-request budget before the model
+ * wrote a word, truncating the answer. The opening of a section carries
+ * its operative rule, which is what the answer cites.
+ */
+const PROMPT_CHUNK_MAX_CHARS = 1500;
+
+function clipChunk(text: string): string {
+  if (text.length <= PROMPT_CHUNK_MAX_CHARS) return text;
+  const cut = text.lastIndexOf(" ", PROMPT_CHUNK_MAX_CHARS);
+  return `${text.slice(0, cut > 1000 ? cut : PROMPT_CHUNK_MAX_CHARS)} […]`;
+}
+
 export function buildContextBlock(chunks: RetrievedChunk[]): string {
   if (chunks.length === 0) {
     return `RETRIEVED LEGAL DATA:
@@ -350,7 +396,7 @@ Because nothing was retrieved, you MUST NOT state any section number, punishment
       (c, i) =>
         `[Source ${i + 1}] ${c.sourceTitle}${c.actName ? ` — ${c.actName}` : ""}${
           c.section ? `, Section ${c.section}` : ""
-        } (jurisdiction: ${c.jurisdiction}, verification: ${c.verificationStatus})\n---\n${c.text}\n---`
+        } (jurisdiction: ${c.jurisdiction}, verification: ${c.verificationStatus})\n---\n${clipChunk(c.text)}\n---`
     )
     .join("\n\n");
 

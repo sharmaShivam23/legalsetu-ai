@@ -53,16 +53,21 @@ function getDailyLimit(provider: string): number {
   }
   
   // Default limits if not configured
+  // Per-USER messages per day. Each chat turn counts once, and an intake
+  // (Case Analysis / FIR) uses one per question answered, so the old 30-50
+  // ran out partway through a single afternoon of real use. Provider-side
+  // quotas are handled separately by key rotation and fallback.
   const defaults: Record<string, number> = {
-    gemini: 50,
-    openai: 30,
-    anthropic: 30,
-    groq: 50,
-    openrouter: 30,
-    opencode: 30,
+    gemini: 300,
+    openai: 150,
+    anthropic: 150,
+    groq: 300,
+    cerebras: 300,
+    openrouter: 150,
+    opencode: 150,
   };
-  
-  return defaults[provider.toLowerCase()] ?? 30;
+
+  return defaults[provider.toLowerCase()] ?? 150;
 }
 
 /**

@@ -12,6 +12,7 @@ import { auth } from "@/lib/auth/auth";
 import { prisma } from "@/lib/db/prisma";
 import { apiError, apiSuccess } from "@/lib/utils/api-response";
 import { logger } from "@/lib/logging/logger";
+import { stripLeadingMarker } from "@/lib/rag/marker";
 
 export const runtime = "nodejs";
 
@@ -83,7 +84,12 @@ export async function GET(_req: NextRequest, { params }: Params) {
       return apiError("NOT_FOUND", "Conversation not found.", 404);
     }
 
-    return apiSuccess({ conversation });
+    // Replies saved before the marker parser was fixed still begin with
+    // "@@Ask<|message|>". Clean them on the way out rather than show it.
+    const messages = conversation.messages.map((m) =>
+      m.role === "ASSISTANT" ? { ...m, content: stripLeadingMarker(m.content) } : m
+    );
+    return apiSuccess({ conversation: { ...conversation, messages } });
   } catch (err) {
     logger.error("Conversation load failed", { userId, errorType: String(err) });
     return apiError("LOAD_FAILED", "Could not open that conversation.", 500);

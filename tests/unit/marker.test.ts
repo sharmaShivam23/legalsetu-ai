@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseLeadingMarker } from "@/lib/rag/marker";
+import { parseLeadingMarker, stripLeadingMarker, stripControlTokens } from "@/lib/rag/marker";
 import { ASK_MARKER, REPORT_MARKER } from "@/lib/rag/prompt";
 
 describe("parseLeadingMarker", () => {
@@ -49,5 +49,50 @@ describe("parseLeadingMarker", () => {
     // "@@A" could still be the start of "@@ASK@@" - must stay unresolved.
     const result = parseLeadingMarker("@@A");
     expect(result.resolved).toBe(false);
+  });
+});
+
+describe("parseLeadingMarker — markers as models really write them", () => {
+  it("handles a lower-case marker with a leaked <|message|> token (seen in Hindi voice mode)", () => {
+    const result = parseLeadingMarker("@@Ask<|message|>आपके वॉलेट के चोरी होने की बात समझ आया।");
+    expect(result.resolved).toBe(true);
+    expect(result.kind).toBe("question");
+    expect(result.rest).toBe("आपके वॉलेट के चोरी होने की बात समझ आया।");
+  });
+
+  it("handles the marker transliterated into Devanagari", () => {
+    const result = parseLeadingMarker("@@आस्क<|message|>समझ गया, घर में।");
+    expect(result.kind).toBe("question");
+    expect(result.rest).toBe("समझ गया, घर में।");
+  });
+
+  it("recognises a translated REPORT marker", () => {
+    const result = parseLeadingMarker("@@रिपोर्ट@@\n## उत्तर");
+    expect(result.kind).toBe("report");
+    expect(result.rest).toBe("## उत्तर");
+  });
+
+  it("waits while a control token is still arriving", () => {
+    expect(parseLeadingMarker("@@Ask").resolved).toBe(false);
+    expect(parseLeadingMarker("@@Ask<|mess").resolved).toBe(false);
+    expect(parseLeadingMarker("<|chan").resolved).toBe(false);
+  });
+
+  it("strips control tokens before the marker", () => {
+    const result = parseLeadingMarker("<|channel|>final<|message|>@@ASK@@\nWhen did it happen?");
+    expect(result.kind).toBe("question");
+    expect(result.rest).toBe("When did it happen?");
+  });
+
+  it("never shows a marker that was not recognised as either kind", () => {
+    const result = parseLeadingMarker("@@Frage@@ Wann ist das passiert?");
+    expect(result.resolved).toBe(true);
+    expect(result.rest).not.toContain("@@");
+  });
+
+  it("cleans replies already saved with a broken marker", () => {
+    expect(stripLeadingMarker("@@Ask<|message|>क्या आप बता सकते हैं?")).toBe("क्या आप बता सकते हैं?");
+    expect(stripLeadingMarker("A normal reply with no marker.")).toBe("A normal reply with no marker.");
+    expect(stripControlTokens("Answer<|end|>")).toBe("Answer");
   });
 });

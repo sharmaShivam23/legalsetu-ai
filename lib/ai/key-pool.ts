@@ -25,6 +25,8 @@ const memoryBenched = new Map<string, number>();
 
 /** A quota/rate limit usually clears within the hour on free tiers. */
 const QUOTA_COOLDOWN_MS = 10 * 60 * 1000;
+/** A per-minute rate limit: back in a minute. */
+const MINUTE_COOLDOWN_MS = 60 * 1000;
 /** A revoked or blocked key does not come back on its own. */
 const REJECTED_COOLDOWN_MS = 60 * 60 * 1000;
 
@@ -151,7 +153,13 @@ export async function withKeyRotation<T>(
         continue;
       }
       if (isQuotaError(err)) {
-        await markKeyExhausted(key, scope ?? ALL_SCOPES, QUOTA_COOLDOWN_MS);
+        // A per-minute limit (Groq's 8k tokens/minute, an RPM cap) clears
+        // in under a minute. Benching the key for the full 10 minutes
+        // meant a few long answers sidelined every key for ten minutes.
+        const perMinute = /per minute|\(tpm\)|\(rpm\)|try again in \d+(\.\d+)?m?s\b/i.test(
+          String((err as any)?.message ?? err)
+        );
+        await markKeyExhausted(key, scope ?? ALL_SCOPES, perMinute ? MINUTE_COOLDOWN_MS : QUOTA_COOLDOWN_MS);
         continue;
       }
       throw err;

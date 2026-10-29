@@ -130,8 +130,25 @@ const MIN_CLAUSE_CHARS = 40;
  * The key difference from extractSentences: a comma after 40+ chars of
  * accumulated text triggers a split, getting audio to the speaker
  * roughly half a sentence sooner on every single turn.
+ *
+ * `minClauseChars` lets a caller ask for a shorter FIRST clause than the
+ * rest. Time-to-first-audio is the number a listener actually feels —
+ * until it lands they are sitting in silence wondering whether anything
+ * is happening — whereas later clauses are synthesised while earlier
+ * ones are still playing and their length costs nothing.
  */
-export function extractClauses(buffer: string): SentenceSplit {
+export function extractClauses(
+  buffer: string,
+  minClauseChars = MIN_CLAUSE_CHARS,
+  /**
+   * When set and NO clause boundary has produced anything yet, a pending
+   * run longer than this is cut at its last word break. Meant for the
+   * first clip only: a long opening sentence with no comma otherwise has
+   * to be synthesised whole (measured: ~9s of audio, ~3s to synthesise)
+   * before the listener hears a single word.
+   */
+  forceSplitChars?: number
+): SentenceSplit {
   const clauses: string[] = [];
   let pending = "";
   let cursor = 0;
@@ -155,7 +172,7 @@ export function extractClauses(buffer: string): SentenceSplit {
     if (isSentenceEnd && candidate.length >= MIN_SENTENCE_CHARS) {
       clauses.push(candidate);
       pending = "";
-    } else if (!isSentenceEnd && candidate.length >= MIN_CLAUSE_CHARS) {
+    } else if (!isSentenceEnd && candidate.length >= minClauseChars) {
       clauses.push(candidate);
       pending = "";
     } else {
@@ -164,5 +181,15 @@ export function extractClauses(buffer: string): SentenceSplit {
     }
   }
 
-  return { sentences: clauses, rest: (pending + buffer.slice(cursor)).replace(/^\s+/, "") };
+  let rest = (pending + buffer.slice(cursor)).replace(/^\s+/, "");
+
+  if (forceSplitChars && clauses.length === 0 && rest.length > forceSplitChars) {
+    const cut = rest.lastIndexOf(" ", forceSplitChars);
+    if (cut >= minClauseChars) {
+      clauses.push(rest.slice(0, cut).trim());
+      rest = rest.slice(cut + 1);
+    }
+  }
+
+  return { sentences: clauses, rest };
 }

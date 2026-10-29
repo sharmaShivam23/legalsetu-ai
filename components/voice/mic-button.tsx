@@ -1,111 +1,161 @@
 "use client";
 
 // ==========================================================
-// LegalSetu — Language-aware microphone
+// LegalSetu — Dictation microphone
 // ----------------------------------------------------------
-// Speaks the same language as the rest of the app. Two paths:
+// Tap to record, tap to stop. The clip goes to /api/voice/stt,
+// which transcribes it with Sarvam server-side and returns the
+// text plus the language it detected.
 //
-//  1. The browser's own speech recognition, when available.
-//     Instant, free, no upload, and genuinely good at the major
-//     Indian languages in Chrome/Edge.
-//  2. Otherwise record and send to /api/voice/transcribe WITH
-//     the chosen language, so the model transcribes in that
-//     language's script instead of translating to English.
+// One path, deliberately. This used to prefer the browser's own
+// SpeechRecognition and fall back to the server only when the
+// browser had none — but that check (`speech.supported`) is true
+// in every Chromium browser, so in practice the server path was
+// never reached, and the recogniser was always told to listen in
+// the INTERFACE language. Someone reading the app in English and
+// speaking Hindi got an en-IN recogniser and nonsense back.
+//
+// Sarvam detects the language from the audio instead of being
+// told, so the same button works whatever the user speaks and
+// whatever the interface is set to. It costs one upload, which
+// for a dictated sentence is well under a second.
+//
+// (components/voice/voice-mode.tsx has the same reasoning for
+// the continuous conversational loop.)
 // ==========================================================
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Mic, Square, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils/cn";
-import { useLanguage } from "@/components/providers/LanguageProvider";
-import { useVoiceInput } from "@/hooks/use-speech";
 
 type MicState = "idle" | "listening" | "processing" | "error";
+
+/**
+ * Hard ceiling on one dictation. Guards against a recording left
+ * running by accident: the server rejects anything over 8MB, and a
+ * clip that long is not a dictated question anyway.
+ */
+const MAX_RECORDING_MS = 60_000;
+
+function pickMimeType(): string {
+  const candidates = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg;codecs=opus"];
+  for (const type of candidates) {
+    if (typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported(type)) return type;
+  }
+  return "";
+}
 
 export function MicButton({
   onTranscript,
 }: {
   onTranscript: (text: string) => void;
 }) {
-  const { language } = useLanguage();
   const [state, setState] = useState<MicState>("idle");
 
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+  const limitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Path 1 — browser speech recognition in the chosen language.
-  const speech = useVoiceInput();
-  const lastSentRef = useRef("");
+  const releaseStream = useCallback(() => {
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current = null;
+    if (limitTimerRef.current) {
+      clearTimeout(limitTimerRef.current);
+      limitTimerRef.current = null;
+    }
+  }, []);
 
-  // Forward each finalised phrase exactly once.
+  // A recording still running when the component goes away would hold
+  // the microphone open and leave the browser's recording indicator on.
   useEffect(() => {
-    if (!speech.transcript || speech.transcript === lastSentRef.current) return;
-    const addition = speech.transcript.slice(lastSentRef.current.length).trim();
-    lastSentRef.current = speech.transcript;
-    if (addition) onTranscript(addition);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [speech.transcript]);
+    return () => {
+      try {
+        recorderRef.current?.stop();
+      } catch {
+        // Already inactive.
+      }
+      releaseStream();
+    };
+  }, [releaseStream]);
 
-  useEffect(() => {
-    if (speech.supported) setState(speech.listening ? "listening" : "idle");
-  }, [speech.listening, speech.supported]);
-
-  // Path 2 — record and transcribe on the server.
-  async function startRecording() {
+  const startRecording = useCallback(async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream);
-      chunksRef.current = [];
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      });
+      streamRef.current = stream;
 
-      recorder.ondataavailable = (e) => chunksRef.current.push(e.data);
+      const mimeType = pickMimeType();
+      const recorder = mimeType
+        ? new MediaRecorder(stream, { mimeType })
+        : new MediaRecorder(stream);
+
+      chunksRef.current = [];
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunksRef.current.push(e.data);
+      };
+
       recorder.onstop = async () => {
         setState("processing");
-        const blob = new Blob(chunksRef.current, { type: "audio/webm" });
-        const formData = new FormData();
-        formData.append("audio", blob, "recording.webm");
-        // Tell the server which language to expect.
-        formData.append("language", language);
+        const blob = new Blob(chunksRef.current, { type: recorder.mimeType || "audio/webm" });
+        chunksRef.current = [];
+        releaseStream();
 
         try {
-          const res = await fetch("/api/voice/transcribe", {
-            method: "POST",
-            body: formData,
-          });
-          const data = await res.json();
-          if (data.success && data.data?.text) onTranscript(data.data.text);
-        } finally {
-          setState("idle");
-          stream.getTracks().forEach((t) => t.stop());
+          const form = new FormData();
+          form.append("audio", blob, "dictation.webm");
+
+          const res = await fetch("/api/voice/stt", { method: "POST", body: form });
+          const json = await res.json().catch(() => null);
+
+          const transcript: string = (json?.data?.transcript ?? "").trim();
+          if (res.ok && transcript) {
+            onTranscript(transcript);
+            setState("idle");
+          } else {
+            // Nothing heard, or the service refused. Flash the error
+            // state rather than failing silently, which is how the old
+            // implementation hid a broken microphone.
+            setState("error");
+            setTimeout(() => setState("idle"), 2000);
+          }
+        } catch {
+          setState("error");
+          setTimeout(() => setState("idle"), 2000);
         }
       };
 
       recorder.start();
-      mediaRecorderRef.current = recorder;
+      recorderRef.current = recorder;
       setState("listening");
+
+      limitTimerRef.current = setTimeout(() => {
+        try {
+          recorderRef.current?.stop();
+        } catch {
+          // Already stopped.
+        }
+      }, MAX_RECORDING_MS);
     } catch {
+      releaseStream();
       setState("error");
       setTimeout(() => setState("idle"), 2000);
     }
-  }
+  }, [onTranscript, releaseStream]);
 
-  function stopRecording() {
-    mediaRecorderRef.current?.stop();
-  }
-
-  function toggle() {
-    if (speech.supported) {
-      // Browser recognition — no upload needed.
-      if (speech.listening) {
-        speech.stop();
-      } else {
-        lastSentRef.current = "";
-        speech.reset();
-        speech.start();
-      }
-      return;
+  const stopRecording = useCallback(() => {
+    try {
+      recorderRef.current?.stop();
+    } catch {
+      // Already inactive; onstop has run or will not fire.
     }
+  }, []);
+
+  const toggle = useCallback(() => {
     if (state === "listening") stopRecording();
-    else void startRecording();
-  }
+    else if (state !== "processing") void startRecording();
+  }, [startRecording, state, stopRecording]);
 
   const listening = state === "listening";
 
@@ -115,7 +165,11 @@ export function MicButton({
       onClick={toggle}
       disabled={state === "processing"}
       aria-label={listening ? "Stop recording" : "Start voice input"}
-      title={listening ? "Stop recording" : "Speak your question"}
+      title={
+        listening
+          ? "Stop recording"
+          : "Speak your question in any Indian language"
+      }
       className={cn(
         "relative flex h-10 w-10 items-center justify-center rounded-full border transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 select-none",
         state === "idle" &&

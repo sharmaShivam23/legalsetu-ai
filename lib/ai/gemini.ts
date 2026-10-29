@@ -20,7 +20,7 @@
 import { GoogleGenAI } from "@google/genai";
 import { languageName } from "@/lib/i18n/languages";
 import { withKeyRotation } from "./key-pool";
-import { isQuotaError } from "./errors";
+import { isQuotaError, AI_REQUEST_TIMEOUT_MS } from "./errors";
 import { getModelById, AIModel } from "./models";
 import type {
   AIProvider,
@@ -54,6 +54,26 @@ function wantsJsonResponse(messages: ChatMessage[]): boolean {
   return combined.includes("Return ONLY valid JSON");
 }
 
+/**
+ * Flash models think before writing, with no ceiling by default — on a
+ * long RAG prompt that was 10-20s of silence before the first token, and
+ * the thinking was paid out of maxOutputTokens, so answers got truncated.
+ * A modest fixed budget keeps reasoning quality and makes replies prompt.
+ * Set GEMINI_THINKING_BUDGET=-1 to restore the model default.
+ */
+const GEMINI_THINKING_BUDGET = Number(process.env.GEMINI_THINKING_BUDGET ?? 1024);
+
+function chatConfig(options: LLMCompletionOptions, systemInstruction: string | undefined, jsonMode: boolean) {
+  return {
+    systemInstruction,
+    temperature: options.temperature ?? 0.2,
+    maxOutputTokens: options.maxTokens ?? 1000,
+    httpOptions: { timeout: AI_REQUEST_TIMEOUT_MS },
+    ...(GEMINI_THINKING_BUDGET >= 0 ? { thinkingConfig: { thinkingBudget: GEMINI_THINKING_BUDGET } } : {}),
+    ...(jsonMode ? { responseMimeType: "application/json" } : {}),
+  };
+}
+
 export class GeminiProvider implements AIProvider {
   name = "gemini";
   isDemo = false;
@@ -78,7 +98,12 @@ export class GeminiProvider implements AIProvider {
       return await withKeyRotation("GEMINI_API_KEY", (apiKey) => run(apiKey, this.chatModel), this.chatModel);
     } catch (err) {
       const lighter = process.env.GEMINI_OVERFLOW_MODEL?.trim() || "gemini-flash-lite-latest";
-      if (!isQuotaError(err) || lighter === this.chatModel) throw err;
+      // Also on overload: "This model is currently experiencing high demand"
+      // (503) is per model, and Flash-Lite is usually still answering.
+      const overloaded = /"code":\s*503|high demand|overloaded|unavailable/i.test(
+        String((err as any)?.message ?? err)
+      );
+      if ((!isQuotaError(err) && !overloaded) || lighter === this.chatModel) throw err;
       return withKeyRotation("GEMINI_API_KEY", (apiKey) => run(apiKey, lighter), lighter);
     }
   }
@@ -91,12 +116,7 @@ export class GeminiProvider implements AIProvider {
       new GoogleGenAI({ apiKey }).models.generateContent({
         model,
         contents,
-        config: {
-          systemInstruction,
-          temperature: options.temperature ?? 0.2,
-          maxOutputTokens: options.maxTokens ?? 1000,
-          ...(jsonMode ? { responseMimeType: "application/json" } : {}),
-        },
+        config: chatConfig(options, systemInstruction, jsonMode),
       })
     );
 
@@ -119,12 +139,7 @@ export class GeminiProvider implements AIProvider {
       new GoogleGenAI({ apiKey }).models.generateContentStream({
         model,
         contents,
-        config: {
-          systemInstruction,
-          temperature: options.temperature ?? 0.2,
-          maxOutputTokens: options.maxTokens ?? 1000,
-          ...(jsonMode ? { responseMimeType: "application/json" } : {}),
-        },
+        config: chatConfig(options, systemInstruction, jsonMode),
       })
     );
 

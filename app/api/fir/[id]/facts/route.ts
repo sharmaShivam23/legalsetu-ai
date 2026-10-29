@@ -103,7 +103,8 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     state = refreshContradictions(state);
 
     const nextVersion = draft.draftVersion + 1;
-    state = { ...state, draftVersion: nextVersion };
+    // Facts changed, so a narrative written from the old ones is stale.
+    state = { ...state, narrative: undefined, draftVersion: nextVersion };
 
     await prisma.fIRDraft.update({
       where: { id },

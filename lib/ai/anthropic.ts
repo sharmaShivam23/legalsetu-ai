@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { withKeyRotation } from "./key-pool";
 import { getModelById } from "./models";
+import { AI_SDK_CLIENT_OPTIONS } from "./errors";
 import type {
   AIProvider,
   EmbeddingResult,
@@ -18,11 +19,11 @@ export class AnthropicProvider implements AIProvider {
 
   constructor(modelId?: string) {
     const model = getModelById(modelId);
-    this.chatModel = model.provider === "anthropic" ? model.getApiId() : (process.env.ANTHROPIC_CHAT_MODEL ?? "claude-3-5-sonnet-20241022");
+    this.chatModel = model.provider === "anthropic" ? model.getApiId() : (process.env.ANTHROPIC_CHAT_MODEL ?? "claude-opus-5-5");
   }
 
   private getClient(apiKey: string) {
-    return new Anthropic({ apiKey });
+    return new Anthropic({ apiKey, ...AI_SDK_CLIENT_OPTIONS });
   }
 
   private convertMessages(messages: LLMCompletionOptions["messages"]) {
@@ -43,7 +44,6 @@ export class AnthropicProvider implements AIProvider {
         model: this.chatModel,
         system: system || undefined,
         messages: formattedMessages,
-        temperature: options.temperature ?? 0.2,
         max_tokens: options.maxTokens ?? 1024,
       })
     );
@@ -59,7 +59,6 @@ export class AnthropicProvider implements AIProvider {
         model: this.chatModel,
         system: system || undefined,
         messages: formattedMessages,
-        temperature: options.temperature ?? 0.2,
         max_tokens: options.maxTokens ?? 1024,
         stream: true,
       })
@@ -91,7 +90,7 @@ export class AnthropicProvider implements AIProvider {
         { role: "system", content: "You are a precise translator. Return only the translated text, nothing else." },
         { role: "user", content: `Translate to ${targetLanguage}:\n\n${text}` }
       ],
-      temperature: 0
+
     });
     return { text: res.trim(), sourceLanguage, targetLanguage };
   }

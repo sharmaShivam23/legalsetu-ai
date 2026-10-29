@@ -33,7 +33,7 @@ const DEFAULT_SPEAKER = process.env.SARVAM_TTS_SPEAKER?.trim() || "ritu";
 export const TTS_MAX_CHARS = 1800;
 
 /** Every configured key, in priority order, no duplicates. */
-export function getSarvamKeys(): string[] {
+function allSarvamKeys(): string[] {
   const keys: string[] = [];
   const push = (value?: string) => {
     const key = value?.trim();
@@ -42,6 +42,47 @@ export function getSarvamKeys(): string[] {
   push(process.env.SARVAM_API_KEY);
   for (let i = 1; i <= 5; i++) push(process.env[`SARVAM_API_KEY_${i}`]);
   return keys;
+}
+
+/**
+ * Keys the API has refused, and when they may be worth trying again.
+ *
+ * A key that is out of credit stays out of credit until somebody pays,
+ * so re-testing it on every request costs a wasted round-trip each
+ * time. With a page translating 280 strings that is 280 pointless
+ * calls, every one of them ahead of a key that would have worked.
+ */
+const benchedKeys = new Map<string, number>();
+
+/** Out of credit or revoked: hours, not minutes. Rate limited: seconds. */
+const CREDIT_BENCH_MS = 60 * 60 * 1000;
+const RATE_BENCH_MS = 30 * 1000;
+
+export function benchSarvamKey(key: string, status: number): void {
+  const ms = status === 429 ? RATE_BENCH_MS : CREDIT_BENCH_MS;
+  benchedKeys.set(key, Date.now() + ms);
+}
+
+/**
+ * Every usable key, worst-known ones last.
+ *
+ * Never returns empty: if every key is benched the bench is clearly
+ * wrong (or the cooldown is stale), and trying a doubtful key beats
+ * refusing to work at all.
+ */
+export function getSarvamKeys(): string[] {
+  const all = allSarvamKeys();
+  const now = Date.now();
+  const usable = all.filter((key) => {
+    const until = benchedKeys.get(key);
+    if (until === undefined) return true;
+    if (now >= until) {
+      benchedKeys.delete(key);
+      return true;
+    }
+    return false;
+  });
+  return usable.length > 0 ? usable : all;
 }
 
 export function isSarvamConfigured(): boolean {
@@ -95,9 +136,19 @@ export function resolveTtsLanguage(appLanguage: string | undefined): TtsLanguage
   return { code: null, exact: false };
 }
 
-/** 429/401/403 are worth retrying on the next key; 4xx bodies are not. */
+/**
+ * Statuses that mean "this KEY is the problem", so the next one is
+ * worth trying. Anything else is a problem with the request itself and
+ * will fail identically on every key.
+ *
+ * 402 belongs here and was missing, which is the whole reason voice mode
+ * went silent: Sarvam answers "No credits available" with 402, the loop
+ * treated that as a fatal request error and broke immediately, and three
+ * perfectly good keys sitting behind the exhausted one were never tried.
+ * The same omission sent every translation to the slow LLM fallback.
+ */
 function shouldRotate(status: number): boolean {
-  return status === 429 || status === 401 || status === 403;
+  return status === 429 || status === 401 || status === 402 || status === 403;
 }
 
 /**
@@ -141,6 +192,7 @@ async function callSarvam(
     lastBody = await res.text().catch(() => "");
 
     if (!shouldRotate(res.status)) break;
+    benchSarvamKey(key, res.status);
     logger.warn("Sarvam key rejected, trying next", { label, status: res.status });
   }
 
