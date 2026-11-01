@@ -140,6 +140,17 @@ export function collectTranslatable(root: Element | Document): CollectResult {
  * translated — otherwise React has replaced it since, and
  * overwriting would clobber newer content.
  */
+/**
+ * Gives a translation the same leading/trailing whitespace as its source.
+ * Translators return trimmed text, so a text node like " of " between two
+ * numbers came back as "का" and the page read "1का5".
+ */
+export function keepEdgeWhitespace(source: string, value: string): string {
+  const lead = source.match(/^\s*/)?.[0] ?? "";
+  const trail = source.match(/\s*$/)?.[0] ?? "";
+  return lead + value.trim() + trail;
+}
+
 export function applyTranslations(
   result: CollectResult,
   translations: string[]
@@ -147,7 +158,8 @@ export function applyTranslations(
   let written = 0;
 
   result.texts.forEach((target, index) => {
-    const value = translations[index];
+    const raw = translations[index];
+    const value = typeof raw === "string" && raw.trim() ? keepEdgeWhitespace(target.source, raw) : raw;
     if (typeof value !== "string" || !value || value === target.source) return;
     if (target.node.nodeValue !== target.source) return;
 

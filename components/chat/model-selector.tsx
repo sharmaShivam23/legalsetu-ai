@@ -23,6 +23,9 @@ const UI_MODELS: UIModel[] = [
   { id: "anthropic-default", category: "DEFAULT", name: "Claude", capability: "Balanced" },
   { id: "openai-default", category: "DEFAULT", name: "OpenAI", capability: "Balanced" },
   { id: "groq-default", category: "DEFAULT", name: "Groq", capability: "Fast" },
+  { id: "mistral-default", category: "DEFAULT", name: "Mistral", capability: "Balanced" },
+  { id: "ollama-local", category: "DEFAULT", name: "Local (Ollama)", capability: "Fast" },
+  { id: "cerebras-default", category: "DEFAULT", name: "Cerebras", capability: "Fast" },
 
   { id: "openrouter-nemotron", category: "OPENROUTER", name: "Nemotron Super", capability: "Reasoning" },
   { id: "openrouter-gemma", category: "OPENROUTER", name: "Gemma 4 26B", capability: "Balanced" },

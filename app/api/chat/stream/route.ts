@@ -391,7 +391,9 @@ export async function POST(req: NextRequest) {
               // lengthen the prompt, and prompt length is paid for in
               // time-to-first-token, which a listener experiences as
               // silence rather than as a progress bar.
-              ...(voice ? { topK: VOICE_TOP_K } : {}),
+              // The local model gets the same narrow retrieval: every
+              // prompt token costs it real seconds on a laptop CPU.
+              ...(voice || model.provider === "ollama" ? { topK: VOICE_TOP_K } : {}),
             });
         const retrievalLatencyMs = Date.now() - retrievalStart;
         const memoryBlock = await memoryPromise;

@@ -112,6 +112,14 @@ export async function createProviderInstance(model: AIModel): Promise<AIProvider
       const { OpenRouterProvider } = await import("./openrouter");
       return new OpenRouterProvider(model.id);
     }
+    case "ollama": {
+      const { OllamaProvider } = await import("./ollama");
+      return new OllamaProvider();
+    }
+    case "mistral": {
+      const { MistralProvider } = await import("./mistral");
+      return new MistralProvider(model.id);
+    }
     case "opencode": {
       const { OpenCodeProvider } = await import("./opencode");
       return new OpenCodeProvider(model.id);
@@ -133,6 +141,9 @@ async function hasKeysForProvider(providerName: string): Promise<boolean> {
     case "cerebras": prefix = "CEREBRAS_API_KEY"; break;
     case "openrouter": prefix = "OPENROUTER_API_KEY"; break;
     case "opencode": prefix = "OPENCODE_API_KEY"; break;
+    case "mistral": prefix = "MISTRAL_API_KEY"; break;
+    // Not a key: the local server URL. Setting it is what enables Ollama.
+    case "ollama": prefix = "OLLAMA_BASE_URL"; break;
   }
   if (!prefix) return false;
   const keys = await getAvailableKeys(prefix);
@@ -225,7 +236,9 @@ export async function getEmbeddingProvider(): Promise<AIProvider> {
     main.name === "cerebras" ||
     main.name === "anthropic" ||
     main.name === "openrouter" ||
-    main.name === "opencode"
+    main.name === "opencode" ||
+    main.name === "mistral" ||
+    main.name === "ollama"
   ) {
     if (await hasKeysForProvider("gemini")) {
       return createProviderInstance(getModelById("gemini-default"));

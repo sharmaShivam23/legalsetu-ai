@@ -102,8 +102,13 @@ export function AutoTranslate() {
       }, DEBOUNCE_MS);
     };
 
-    // First pass over whatever is already on screen.
-    schedule();
+    // Switching between two Indian languages (Hindi -> Tamil): the page is
+    // showing OUR Hindi, which collectTranslatable treats as already done,
+    // so it stayed in Hindi until a reload. Put the English originals back
+    // first, then translate them into the new language — immediately, not
+    // after the debounce, so the English is never visibly painted.
+    restoreOriginals(document.body);
+    void run();
 
     // Catch everything rendered later: navigation, dialogs, backend data.
     const observer = new MutationObserver((records) => {

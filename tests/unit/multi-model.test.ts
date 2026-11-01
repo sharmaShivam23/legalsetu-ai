@@ -92,7 +92,15 @@ describe("Multi-Model AI Selector", () => {
     const order = getAutoFallbackSequence().map((m) => m.id);
 
     expect(order[0]).toBe("groq-default");
-    expect(order[1]).toBe("cerebras-default");
+    // Mistral second: the free backup that needs no payment card.
+    // Cerebras now requires a card before its free credit works.
+    expect(order[1]).toBe("mistral-default");
+    expect(order[2]).toBe("cerebras-default");
+
+    // The local model runs only when picked by hand: on a laptop CPU it
+    // takes minutes per answer, so an automatic switch to it mid-demo
+    // would freeze the machine.
+    expect(order).not.toContain("ollama-local");
 
     // Providers known to be out of credit or blocked must stay behind
     // the ones that actually answer.

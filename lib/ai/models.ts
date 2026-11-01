@@ -1,6 +1,6 @@
 ﻿// lib/ai/models.ts
 
-export type ModelCategory = "DEFAULT" | "OPENAI" | "ANTHROPIC" | "GOOGLE" | "GROQ" | "CEREBRAS" | "OPENROUTER" | "OPENCODE";
+export type ModelCategory = "DEFAULT" | "OPENAI" | "ANTHROPIC" | "GOOGLE" | "GROQ" | "CEREBRAS" | "OPENROUTER" | "OPENCODE" | "MISTRAL" | "LOCAL";
 export type ModelCapability = "Fast" | "Balanced" | "Reasoning";
 
 export interface AIModel {
@@ -60,7 +60,31 @@ export const AI_MODELS: AIModel[] = [
     capability: "Fast",
     getApiId: () => process.env.GROQ_CHAT_MODEL || "openai/gpt-oss-120b",
   },
-  // Cerebras — OpenAI-compatible, ~2000 tok/s, 1M free tokens/day.
+  // Local model through Ollama. Deliberately NOT in getAutoFallbackSequence:
+  // on a laptop CPU it takes minutes per answer, so it runs only when
+  // picked by hand. Enabled by OLLAMA_BASE_URL (see lib/ai/ollama.ts).
+  {
+    id: "ollama-local",
+    provider: "ollama",
+    category: "LOCAL",
+    name: "Local (Ollama)",
+    capability: "Fast",
+    getApiId: () => process.env.OLLAMA_CHAT_MODEL || "gemma3:1b",
+  },
+  // Mistral — free "Experiment" plan: no card, phone verification only,
+  // roughly 1B tokens/month. The no-card backup behind Groq (Cerebras now
+  // requires a payment method before its free credit can be used).
+  {
+    id: "mistral-default",
+    provider: "mistral",
+    category: "MISTRAL",
+    name: "Mistral",
+    capability: "Balanced",
+    getApiId: () => process.env.MISTRAL_CHAT_MODEL || "mistral-medium-latest",
+  },
+  // Cerebras — OpenAI-compatible, ~2000 tok/s. As of Nov 2026 its API
+  // stays inactive until a payment method is added (that unlocks $5 of
+  // free credit), so it is no longer a no-card option.
   // Second in the chain rather than first: the free tier allows only
   // about 5 requests/minute, which Groq's limits comfortably beat for
   // interactive chat, so this is the fast reserve once Groq's daily
@@ -155,6 +179,7 @@ export function getModelById(id?: string | null): AIModel {
 export function getAutoFallbackSequence(): AIModel[] {
   const sequenceIds = [
     "groq-default",
+    "mistral-default",
     "cerebras-default",
     "gemini-default",
     "openrouter-gemma",

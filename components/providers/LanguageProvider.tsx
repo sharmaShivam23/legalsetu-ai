@@ -81,6 +81,27 @@ function loadCache(language: string): Record<string, string> {
   }
 }
 
+/**
+ * Loads the static language pack built by scripts/build-language-packs.ts
+ * (public/i18n/<lang>.json). One small CDN file holds every interface
+ * string already translated, so a language switch no longer waits on
+ * hundreds of live API calls — which on a fresh deployment, with an empty
+ * translation cache, took ~30 minutes per language. A missing pack is not
+ * an error: the live API simply covers everything, as before.
+ */
+async function fetchPack(language: string): Promise<Record<string, string>> {
+  try {
+    // no-cache = revalidate with the CDN (a cheap 304) so a redeploy with
+    // fresh translations is picked up, without re-downloading every time.
+    const res = await fetch(`/i18n/${language}.json`, { cache: "no-cache" });
+    if (!res.ok) return {};
+    const json = await res.json();
+    return json && typeof json === "object" ? (json as Record<string, string>) : {};
+  } catch {
+    return {};
+  }
+}
+
 function saveCache(language: string, cache: Record<string, string>): void {
   try {
     const keys = Object.keys(cache);
@@ -118,6 +139,20 @@ export function LanguageProvider({
   const cacheRef = useRef<Record<string, string>>({});
   // De-duplicates concurrent requests for the same string.
   const inFlightRef = useRef<Map<string, Promise<void>>>(new Map());
+  // Static language packs, loaded once per language per page load.
+  const packsRef = useRef<Record<string, Record<string, string>>>({});
+  const packLoadsRef = useRef<Map<string, Promise<void>>>(new Map());
+  const ensurePack = useCallback((code: string): Promise<void> => {
+    if (code === DEFAULT_LANGUAGE) return Promise.resolve();
+    let load = packLoadsRef.current.get(code);
+    if (!load) {
+      load = fetchPack(code).then((pack) => {
+        packsRef.current[code] = pack;
+      });
+      packLoadsRef.current.set(code, load);
+    }
+    return load;
+  }, []);
   const activeRequests = useRef(0);
   // Warn about an unreachable translation provider only once per switch,
   // instead of on every batch the page sends.
@@ -134,6 +169,7 @@ export function LanguageProvider({
     const resolved = normalizeLanguage(stored ?? readCookie(LANGUAGE_COOKIE) ?? initialLanguage);
 
     cacheRef.current = loadCache(resolved);
+    void ensurePack(resolved);
     setLanguageState(resolved);
     setIsReady(true);
     if (resolved !== DEFAULT_LANGUAGE) setVersion((v) => v + 1);
@@ -153,6 +189,7 @@ export function LanguageProvider({
     setLanguageState((current) => {
       if (current === next) return current;
       cacheRef.current = loadCache(next);
+      void ensurePack(next);
       inFlightRef.current.clear();
       warnedRef.current = false;
       return next;
@@ -187,10 +224,12 @@ export function LanguageProvider({
     async (texts: string[]): Promise<string[]> => {
       if (language === DEFAULT_LANGUAGE || texts.length === 0) return texts;
 
+      // The static pack answers almost every interface string instantly.
+      await ensurePack(language);
+      const pack = packsRef.current[language] ?? {};
       const cache = cacheRef.current;
-      const missing = Array.from(
-        new Set(texts.filter((t) => t && cache[t] === undefined))
-      );
+      const known = (t: string) => pack[t] ?? cache[t];
+      const missing = Array.from(new Set(texts.filter((t) => t && known(t) === undefined)));
 
       if (missing.length > 0) {
         const requestLanguage = language;
@@ -198,38 +237,46 @@ export function LanguageProvider({
         setIsTranslating(true);
 
         try {
+          const slices: string[][] = [];
           for (let i = 0; i < missing.length; i += MAX_PER_REQUEST) {
-            const slice = missing.slice(i, i + MAX_PER_REQUEST);
-            const res = await fetch("/api/i18n/translate", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ texts: slice, target: requestLanguage }),
-            });
-
-            if (!res.ok) continue;
-            const json = await res.json();
-            const translations: unknown = json?.data?.translations;
-            if (!Array.isArray(translations)) continue;
-
-            // The provider is unreachable or misconfigured (bad API key,
-            // quota exhausted). Say so — otherwise the page just stays in
-            // English and looks broken.
-            if (json?.data?.degraded && !warnedRef.current) {
-              warnedRef.current = true;
-              toast.error(
-                "Translation is unavailable right now, so text is still showing in English. Check the AI provider API key.",
-                { duration: 6000 }
-              );
-            }
-
-            // Ignore a reply that arrived after the user switched again.
-            if (requestLanguage !== language) return texts;
-
-            slice.forEach((source, index) => {
-              const value = translations[index];
-              if (typeof value === "string" && value) cache[source] = value;
-            });
+            slices.push(missing.slice(i, i + MAX_PER_REQUEST));
           }
+
+          // In parallel: these used to go one after another, each waiting
+          // for the previous batch's translations to finish.
+          await Promise.all(
+            slices.map(async (slice) => {
+              const res = await fetch("/api/i18n/translate", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ texts: slice, target: requestLanguage }),
+              });
+
+              if (!res.ok) return;
+              const json = await res.json();
+              const translations: unknown = json?.data?.translations;
+              if (!Array.isArray(translations)) return;
+
+              // The provider is unreachable or misconfigured (bad API key,
+              // quota exhausted). Say so — otherwise the page just stays in
+              // English and looks broken.
+              if (json?.data?.degraded && !warnedRef.current) {
+                warnedRef.current = true;
+                toast.error(
+                  "Translation is unavailable right now, so text is still showing in English. Check the AI provider API key.",
+                  { duration: 6000 }
+                );
+              }
+
+              slice.forEach((source, index) => {
+                const value = translations[index];
+                if (typeof value === "string" && value) cache[source] = value;
+              });
+            })
+          );
+
+          // Ignore replies that arrived after the user switched again.
+          if (requestLanguage !== language) return texts;
           saveCache(requestLanguage, cache);
         } catch {
           // Network failure — fall through and return what we have.
@@ -242,9 +289,9 @@ export function LanguageProvider({
         }
       }
 
-      return texts.map((text) => cache[text] ?? text);
+      return texts.map((text) => pack[text] ?? cache[text] ?? text);
     },
-    [language]
+    [language, ensurePack]
   );
 
   const value = useMemo<LanguageContextValue>(

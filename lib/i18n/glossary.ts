@@ -122,6 +122,10 @@ export function restoreProtectedTerms(text: string, tokens: string[]): string {
 export function isTranslatable(text: string): boolean {
   const trimmed = text.trim();
   if (trimmed.length < 2) return false;
-  // Must contain at least two consecutive letters in some script.
-  return /\p{L}{2,}/u.test(trimmed);
+  // The interface is written in English, so translatable text always has
+  // Latin letters. This used to accept letters in ANY script, which sent
+  // text already in Hindi (a user's own message, an AI answer in Tamil)
+  // off to be "translated" into the language it was already in — wasted
+  // API calls on every page, paid for in seconds of waiting.
+  return /[A-Za-z]{2,}/.test(trimmed);
 }

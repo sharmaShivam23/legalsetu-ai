@@ -108,9 +108,15 @@ describe("translatability filter", () => {
     expect(isTranslatable("A")).toBe(false);
   });
 
-  it("accepts real copy in any script", () => {
+  it("accepts English copy, including mixed with numbers or Indian scripts", () => {
     expect(isTranslatable("File a complaint")).toBe(true);
-    expect(isTranslatable("शिकायत दर्ज करें")).toBe(true);
-    expect(isTranslatable("வழக்கு")).toBe(true);
+    expect(isTranslatable("Section 303 of BNS")).toBe(true);
+    expect(isTranslatable("Ask LegalSetu — शिकायत")).toBe(true);
+  });
+
+  it("skips text that is already in an Indian script — it needs no translation", () => {
+    expect(isTranslatable("शिकायत दर्ज करें")).toBe(false);
+    expect(isTranslatable("வழக்கு")).toBe(false);
+    expect(isTranslatable("घर में ही।")).toBe(false);
   });
 });

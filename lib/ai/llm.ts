@@ -60,6 +60,12 @@ function isTransientError(err: unknown): boolean {
 
 const TRANSIENT_RETRY_DELAY_MS = 1200;
 
+/** A local model on a laptop CPU reads a long prompt for a minute or more
+ *  before its first word; 20s would cancel every answer. */
+const LOCAL_FIRST_TOKEN_TIMEOUT_MS = Number(process.env.OLLAMA_FIRST_TOKEN_TIMEOUT_MS) || 180_000;
+const firstTokenTimeoutFor = (name: string) =>
+  name === "ollama" ? LOCAL_FIRST_TOKEN_TIMEOUT_MS : FIRST_TOKEN_TIMEOUT_MS;
+
 /**
  * How long a stream may stay silent before its first token. A provider
  * that accepted the request but is queueing it (free tiers do this under
@@ -74,9 +80,10 @@ const FIRST_TOKEN_TIMEOUT_MS = Number(process.env.AI_FIRST_TOKEN_TIMEOUT_MS) || 
  * first text chunk is through, the stream runs unguarded.
  */
 async function* withFirstTokenTimeout<T extends { delta: string }>(
-  source: AsyncGenerator<T>
+  source: AsyncGenerator<T>,
+  timeoutMs: number = FIRST_TOKEN_TIMEOUT_MS
 ): AsyncGenerator<T> {
-  const deadline = Date.now() + FIRST_TOKEN_TIMEOUT_MS;
+  const deadline = Date.now() + timeoutMs;
   let gotText = false;
   while (true) {
     let next: IteratorResult<T>;
@@ -215,7 +222,7 @@ export async function* streamCompletion(
 
   try {
     if (isProviderBenched(provider.name)) throw benchedError(provider.name);
-    for await (const chunk of withFirstTokenTimeout(provider.streamComplete({ messages, ...opts }))) {
+    for await (const chunk of withFirstTokenTimeout(provider.streamComplete({ messages, ...opts }), firstTokenTimeoutFor(provider.name))) {
       if (chunk.delta) emittedAnything = true;
       yield chunk;
     }
@@ -236,7 +243,7 @@ export async function* streamCompletion(
 
       let retryEmitted = false;
       try {
-        for await (const chunk of withFirstTokenTimeout(provider.streamComplete({ messages, ...opts }))) {
+        for await (const chunk of withFirstTokenTimeout(provider.streamComplete({ messages, ...opts }), firstTokenTimeoutFor(provider.name))) {
           if (chunk.delta) retryEmitted = true;
           yield chunk;
         }

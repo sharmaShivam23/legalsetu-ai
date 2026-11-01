@@ -63,6 +63,9 @@ function getDailyLimit(provider: string): number {
     anthropic: 150,
     groq: 300,
     cerebras: 300,
+    mistral: 300,
+    // Runs on this machine: no provider quota to protect.
+    ollama: 100000,
     openrouter: 150,
     opencode: 150,
   };

@@ -17,6 +17,7 @@
 import { AI_MODELS, getAutoFallbackSequence, type AIModel } from "./models";
 import { getKeysForProvider } from "./key-pool";
 import { GROQ_OVERFLOW_MODELS } from "./groq";
+import { ollamaBaseUrl } from "./ollama";
 
 export type Health =
   | "working"
@@ -77,6 +78,7 @@ const KEY_PREFIX: Record<string, string> = {
   cerebras: "CEREBRAS_API_KEY",
   openrouter: "OPENROUTER_API_KEY",
   opencode: "OPENCODE_API_KEY",
+  mistral: "MISTRAL_API_KEY",
 };
 
 const OPENAI_COMPATIBLE_URL: Record<string, string> = {
@@ -84,6 +86,7 @@ const OPENAI_COMPATIBLE_URL: Record<string, string> = {
   cerebras: "https://api.cerebras.ai/v1/chat/completions",
   openai: "https://api.openai.com/v1/chat/completions",
   openrouter: "https://openrouter.ai/api/v1/chat/completions",
+  mistral: "https://api.mistral.ai/v1/chat/completions",
   opencode: `${process.env.OPENCODE_BASE_URL || "https://opencode.ai/zen/v1"}/chat/completions`,
 };
 
@@ -224,7 +227,28 @@ function summarise(probes: KeyProbe[]): Pick<ModelStatus, "health" | "workingKey
   };
 }
 
+/**
+ * The local model is checked by asking Ollama which models are downloaded
+ * — instant — instead of generating a token, which can take a minute on
+ * a laptop CPU.
+ */
+async function probeOllama(model: { id: string; name: string; provider: string; apiModel: string }): Promise<ModelStatus> {
+  const base = ollamaBaseUrl();
+  const out = { id: model.id, name: model.name, provider: model.provider, apiModel: model.apiModel, workingKeys: 0, totalKeys: 0 };
+  if (!base) return { ...out, health: "not_configured", detail: "Set OLLAMA_BASE_URL in .env to enable" };
+  const { res } = await timed(() => fetch(`${base}/api/tags`, { signal: AbortSignal.timeout(5_000) }));
+  if (!res?.ok) return { ...out, totalKeys: 1, health: "unavailable", detail: "Ollama isn't running — start the Ollama app" };
+  const json = (await res.json().catch(() => ({}))) as { models?: { name: string }[] };
+  const names = (json.models ?? []).map((m) => m.name);
+  const wanted = model.apiModel.includes(":") ? model.apiModel : `${model.apiModel}:latest`;
+  if (!names.includes(wanted)) {
+    return { ...out, totalKeys: 1, health: "unavailable", detail: `Model not downloaded — run: ollama pull ${model.apiModel}` };
+  }
+  return { ...out, totalKeys: 1, workingKeys: 1, health: "working", detail: "Runs on this computer — slow on CPU" };
+}
+
 async function probeModel(model: { id: string; name: string; provider: string; apiModel: string }): Promise<ModelStatus> {
+  if (model.provider === "ollama") return probeOllama(model);
   const keys = getKeysForProvider(KEY_PREFIX[model.provider] ?? "");
   const probes = await Promise.all(keys.map((k) => probeKey(model.provider, model.apiModel, k)));
   return {
