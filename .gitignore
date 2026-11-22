@@ -70,3 +70,9 @@ findstr
 dev-run.log
 warm-*.log
 .env.backup-*
+
+# Private uploads (lib/storage/storage.ts)
+.data/
+
+# generated call audio (lib/calls/speech.ts, scripts/call-simulator.ts)
+.cache/

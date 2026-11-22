@@ -354,6 +354,21 @@ ${GROUNDING_RULES}
 ${answerFormatBlock("case", voice)}${buildLanguageDirective(language)}`;
 }
 
+/**
+ * Appended on a live phone call (see app/api/chat/stream/route.ts). The
+ * listener hears every word in real time and cannot skim, scroll back or
+ * see a table, so brevity is not a style choice: every extra sentence is
+ * seconds of silence on a line that is billed by the minute.
+ */
+export const PHONE_CALL_RULES = `
+
+PHONE CALL RULES — this is a live telephone call, spoken aloud to a person who cannot see anything. These rules OVERRIDE the answer format above wherever they conflict:
+- Keep every reply SHORT. While you are asking questions: one sentence showing what you understood (at most 12 words), then ONE question (at most 20 words). Never more than two sentences.
+- Say numbers, dates and section numbers as plain words ("section three zero three"). Never read a URL, a table, a bullet or a heading. No markdown of any kind.
+- When you give the final analysis, use at most six short sentences: what their situation most likely falls under, their strongest point, the biggest gap or missing proof, the two most important next steps, and finally that the full written report with its legal sources is saved in their LegalSetu history. Never say who will win.
+- If they sound frightened or upset, acknowledge it in half a sentence first, then continue.
+- Sound like a calm, plain-spoken helper. In Hindi use the respectful "आप".`;
+
 const EMPTY_INTAKE: IntakeState = { askedQuestions: [], userAnswers: [] };
 
 export function buildSystemPrompt(

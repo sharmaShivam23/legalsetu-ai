@@ -262,3 +262,125 @@ export function buildPasswordResetEmail({ name, code, expiryMinutes }: OtpEmailI
 
   return { subject: `${code} is your LegalSetu password reset code`, html, text };
 }
+
+export interface RightsClockReminderInput {
+  name?: string;
+  personName: string;
+  /** One line per due deadline, already formatted ("Default bail (60-day period) — 30 Oct 2026, tomorrow"). */
+  items: { label: string; when: string; urgent: boolean }[];
+  nextAction?: string;
+  trackerUrl: string;
+}
+
+/**
+ * Deadline reminder for a Rights Clock tracker. Deliberately carries no
+ * charge sections or FIR details — an inbox preview must never expose
+ * that someone's relative is in custody for a particular offence.
+ */
+export function buildRightsClockReminderEmail({
+  name,
+  personName,
+  items,
+  nextAction,
+  trackerUrl,
+}: RightsClockReminderInput): { subject: string; html: string; text: string } {
+  const firstName = name?.trim().split(/\s+/)[0];
+  const greeting = firstName ? `Hi ${escapeHtml(firstName)},` : "Hi,";
+  const anyUrgent = items.some((i) => i.urgent);
+  const rows = items
+    .map(
+      (i) => `
+      <tr>
+        <td style="padding:12px 14px;border-bottom:1px solid ${BORDER};">
+          <p style="margin:0;font-size:14px;font-weight:700;color:${i.urgent ? "#b91c1c" : INK};">${escapeHtml(i.label)}</p>
+          <p style="margin:4px 0 0 0;font-size:13px;color:${MUTED};">${escapeHtml(i.when)}</p>
+        </td>
+      </tr>`
+    )
+    .join("");
+
+  const html = layout({
+    preheader: `A custody deadline for ${personName} is coming up.`,
+    bodyHtml: `
+    <p style="margin:0 0 8px 0;font-size:11px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:${anyUrgent ? "#b91c1c" : BRAND_BLUE};">Rights Clock reminder</p>
+    <h1 style="margin:0 0 12px 0;font-size:22px;line-height:1.3;font-weight:800;color:${INK};">A deadline for ${escapeHtml(personName)} is close</h1>
+    <p style="margin:0 0 20px 0;font-size:15px;line-height:1.65;color:#475569;">${greeting} these rights arise soon. A right that is not claimed in time can be lost.</p>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid ${BORDER};border-radius:12px;border-collapse:separate;">${rows}
+    </table>
+    ${
+      nextAction
+        ? `<p style="margin:20px 0 0 0;font-size:14px;line-height:1.65;color:${INK};"><strong>What to do:</strong> ${escapeHtml(nextAction)}</p>`
+        : ""
+    }
+    <table role="presentation" cellpadding="0" cellspacing="0" style="margin-top:24px;">
+      <tr>
+        <td bgcolor="${BRAND_BLUE}" style="background-color:${BRAND_BLUE};border-radius:10px;">
+          <a href="${escapeHtml(trackerUrl)}" style="display:inline-block;padding:12px 20px;font-size:14px;font-weight:700;color:#ffffff;text-decoration:none;">Open the tracker &amp; application drafts</a>
+        </td>
+      </tr>
+    </table>
+    <p style="margin:20px 0 0 0;font-size:12.5px;line-height:1.65;color:${MUTED};">
+      Every person in custody is entitled to a free lawyer. Call the NALSA helpline <strong style="color:${INK};">15100</strong> or visit the District Legal Services Authority at the district court. You can turn these reminders off on the tracker page.
+    </p>
+  `,
+  });
+
+  const text =
+    `${firstName ? `Hi ${firstName},` : "Hi,"}\n\nRights Clock reminder for ${personName}:\n\n` +
+    items.map((i) => `- ${i.label}: ${i.when}`).join("\n") +
+    (nextAction ? `\n\nWhat to do: ${nextAction}` : "") +
+    `\n\nOpen the tracker: ${trackerUrl}\n\nFree legal aid: NALSA helpline 15100.\n\n— LegalSetu`;
+
+  return {
+    subject: anyUrgent ? `Action needed today — custody deadline for ${personName}` : `Upcoming custody deadline for ${personName}`,
+    html,
+    text,
+  };
+}
+
+export interface NotificationEmailInput {
+  name?: string;
+  subject: string;
+  heading: string;
+  /** Plain text; escaped. Blank lines become paragraph breaks. */
+  body: string;
+  ctaLabel: string;
+  ctaUrl: string;
+}
+
+/**
+ * General-purpose notification (consultation requests, verification
+ * decisions). Never carries case details — only that something happened
+ * and where to look, so an inbox preview reveals nothing sensitive.
+ */
+export function buildNotificationEmail({ name, subject, heading, body, ctaLabel, ctaUrl }: NotificationEmailInput): {
+  subject: string;
+  html: string;
+  text: string;
+} {
+  const firstName = name?.trim().split(/\s+/)[0];
+  const greeting = firstName ? `Hi ${escapeHtml(firstName)},` : "Hi,";
+  const paragraphs = body
+    .split(/\n{2,}/)
+    .map((p) => `<p style="margin:0 0 14px 0;font-size:15px;line-height:1.65;color:#475569;">${escapeHtml(p).replace(/\n/g, "<br />")}</p>`)
+    .join("");
+
+  const html = layout({
+    preheader: heading,
+    bodyHtml: `
+    <h1 style="margin:0 0 12px 0;font-size:22px;line-height:1.3;font-weight:800;color:${INK};">${escapeHtml(heading)}</h1>
+    <p style="margin:0 0 14px 0;font-size:15px;line-height:1.65;color:#475569;">${greeting}</p>
+    ${paragraphs}
+    <table role="presentation" cellpadding="0" cellspacing="0" style="margin-top:10px;">
+      <tr>
+        <td bgcolor="${BRAND_BLUE}" style="background-color:${BRAND_BLUE};border-radius:10px;">
+          <a href="${escapeHtml(ctaUrl)}" style="display:inline-block;padding:12px 20px;font-size:14px;font-weight:700;color:#ffffff;text-decoration:none;">${escapeHtml(ctaLabel)}</a>
+        </td>
+      </tr>
+    </table>
+  `,
+  });
+
+  const text = `${firstName ? `Hi ${firstName},` : "Hi,"}\n\n${heading}\n\n${body}\n\n${ctaLabel}: ${ctaUrl}\n\n— LegalSetu`;
+  return { subject, html, text };
+}

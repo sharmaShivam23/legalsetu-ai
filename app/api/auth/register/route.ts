@@ -7,6 +7,7 @@ import { checkRateLimit } from "@/lib/security/rate-limit";
 import { prisma } from "@/lib/db/prisma";
 import { logger } from "@/lib/logging/logger";
 import { issueOtp } from "@/lib/otp/otp";
+import { saveSignupLocation } from "@/lib/lawyers/signup-location";
 import { sendEmail } from "@/lib/email/mailer";
 import { buildVerificationEmail } from "@/lib/email/templates";
 
@@ -26,7 +27,10 @@ export async function POST(req: NextRequest) {
   const parsed = registerSchema.safeParse(body);
 
   if (!parsed.success) {
-    return apiError("VALIDATION_ERROR", "Invalid registration details. Please check your inputs.", 422);
+    // Address errors are specific ("Enter a valid 6-digit PIN code."); others stay generic.
+    const issue = parsed.error.issues[0];
+    const msg = issue?.path[0] === "location" ? issue.message : "Invalid registration details. Please check your inputs.";
+    return apiError("VALIDATION_ERROR", msg, 422);
   }
 
   // 3. Check for existing user
@@ -53,6 +57,9 @@ export async function POST(req: NextRequest) {
         email: parsed.data.email,
         passwordHash,
         emailVerified: null,
+        // An advocate is listed only after admin verification, so the
+        // role alone grants nothing beyond access to the onboarding flow.
+        role: parsed.data.accountType === "LAWYER" ? "LAWYER" : "USER",
         preferences: {
           create: {
             interfaceLanguage: "en",
@@ -62,6 +69,10 @@ export async function POST(req: NextRequest) {
         },
       },
     });
+
+    // The sign-up address becomes the default location for Find a Lawyer.
+    // Never blocks registration if the location service is unavailable.
+    const locationSaved = await saveSignupLocation(user.id, parsed.data.location);
 
     const code = await issueOtp(user.email, "EMAIL_VERIFICATION");
     const { subject, html, text } = buildVerificationEmail({
@@ -80,6 +91,8 @@ export async function POST(req: NextRequest) {
       {
         id: user.id,
         email: user.email,
+        accountType: parsed.data.accountType,
+        locationSaved,
         // Tells the client whether a real inbox was used, so the UI can
         // say "check your email" vs. point at the server console in a
         // local dev environment with no SMTP configured yet.

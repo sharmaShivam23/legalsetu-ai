@@ -23,7 +23,11 @@
     "preflight": "tsx scripts/preflight.ts",
     "i18n:warm": "tsx scripts/warm-translations.ts",
     "voice:smoke": "tsx scripts/voice-smoke.ts",
-    "i18n:packs": "tsx scripts/build-language-packs.ts"
+    "i18n:packs": "tsx scripts/build-language-packs.ts",
+    "rights-clock:build": "tsx scripts/build-bns-punishments.ts",
+    "lawyers:seed": "tsx scripts/seed-lawyers.ts",
+    "voice:bridge": "tsx voice-bridge/server.ts",
+    "call:simulate": "tsx scripts/call-simulator.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
@@ -48,6 +52,7 @@
     "gsap": "^3.15.0",
     "ioredis": "5.4.1",
     "jspdf": "^4.2.1",
+    "leaflet": "^1.9.4",
     "lucide-react": "^0.469.0",
     "mammoth": "^1.12.1",
     "mermaid": "^11.17.2",
@@ -64,6 +69,7 @@
     "react": "19.0.0",
     "react-dom": "19.0.0",
     "react-hook-form": "^7.85.0",
+    "react-leaflet": "^5.0.0",
     "react-markdown": "9.0.1",
     "remark-gfm": "4.0.0",
     "sonner": "1.7.1",
@@ -72,6 +78,8 @@
     "tesseract.js": "5.1.1",
     "three": "^0.185.1",
     "typescript": "5.7.2",
+    "undici": "7.29.1",
+    "ws": "8.21.3",
     "zod": "3.24.1"
   },
   "devDependencies": {
@@ -79,12 +87,14 @@
     "@playwright/test": "^1.62.1",
     "@testing-library/react": "16.1.0",
     "@types/bcryptjs": "2.4.6",
+    "@types/leaflet": "^1.9.20",
     "@types/node": "22.10.2",
     "@types/nodemailer": "^8.0.1",
     "@types/pdf-parse": "1.1.4",
     "@types/react": "19.0.2",
     "@types/react-dom": "19.0.2",
     "@types/three": "^0.185.4",
+    "@types/ws": "^8.18.2",
     "@vitejs/plugin-react": "4.3.4",
     "eslint": "^9.39.5",
     "jsdom": "^29.1.1",

@@ -11,28 +11,35 @@ datasource db {
 }
 
 model User {
-  id            String          @id @default(uuid())
-  name          String?
-  email         String          @unique
-  emailVerified DateTime?
-  passwordHash  String?
-  image         String?
-  role          Role            @default(USER)
-  createdAt     DateTime        @default(now())
-  updatedAt     DateTime        @updatedAt
-  accounts      Account[]
-  auditLogs     AuditLog[]
-  cases         Case[]
-  conversations Conversation[]
-  documents     Document[]
-  firDrafts     FIRDraft[]
-  feedback      Feedback[]
-  notifications Notification[]
-  sessions      Session[]
-  preferences   UserPreference?
-  memories      UserMemory[]
-  savedSources  SavedSource[]
-  referrals     LawyerReferral[]
+  id              String                @id @default(uuid())
+  name            String?
+  email           String                @unique
+  emailVerified   DateTime?
+  passwordHash    String?
+  image           String?
+  role            Role                  @default(USER)
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+  accounts        Account[]
+  auditLogs       AuditLog[]
+  cases           Case[]
+  conversations   Conversation[]
+  documents       Document[]
+  firDrafts       FIRDraft[]
+  feedback        Feedback[]
+  notifications   Notification[]
+  sessions        Session[]
+  preferences     UserPreference?
+  memories        UserMemory[]
+  savedSources    SavedSource[]
+  referrals       LawyerReferral[]
+  custodyTrackers CustodyTracker[]
+  lawyerProfile   LawyerProfile?        @relation("LawyerProfileOwner")
+  reviewedLawyers LawyerProfile[]       @relation("LawyerProfileReviewer")
+  location        UserLocation?
+  consultations   ConsultationRequest[]
+  consultMessages ConsultationMessage[]
+  callSessions    CallSession[]
 
   @@index([email])
 }
@@ -78,30 +85,78 @@ model UserPreference {
 }
 
 model Case {
-  id            String           @id @default(uuid())
-  userId        String
-  title         String
-  summary       String?
-  status        CaseStatus       @default(OPEN)
-  jurisdiction  String?
+  id              String           @id @default(uuid())
+  userId          String
+  title           String
+  summary         String?
+  status          CaseStatus       @default(OPEN)
+  jurisdiction    String?
   /// Short plain-language note on what to do next — the thing that
   /// turns a folder of chats and documents into an actual case
   /// tracker instead of an archive nobody revisits.
-  nextAction    String?
-  nextActionDue DateTime?
+  nextAction      String?
+  nextActionDue   DateTime?
   /// Set automatically when status moves to RESOLVED or CLOSED,
   /// cleared if it is reopened.
-  closedAt      DateTime?
-  createdAt     DateTime         @default(now())
-  updatedAt     DateTime         @updatedAt
-  user          User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  conversations Conversation[]
-  documents     Document[]
-  firDrafts     FIRDraft[]
-  referrals     LawyerReferral[]
+  closedAt        DateTime?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversations   Conversation[]
+  documents       Document[]
+  firDrafts       FIRDraft[]
+  referrals       LawyerReferral[]
+  custodyTrackers CustodyTracker[]
+  shares          CaseShare[]
 
   @@index([userId])
   @@index([status])
+}
+
+/// Rights Clock (lib/rights-clock): an undertrial's custody timeline
+/// under BNSS §187(3) (default bail) and §479 (release after part-
+/// serving). Only the INPUTS are stored — every date is recomputed on
+/// read, so a saved tracker can never show a stale countdown.
+model CustodyTracker {
+  id                 String    @id @default(uuid())
+  userId             String
+  /// The case this tracker keeps up to date (nextAction / nextActionDue).
+  caseId             String?
+  personName         String
+  relationship       String?
+  policeStation      String?
+  firNumber          String?
+  courtName          String?
+  prisonName         String?
+  arrestDate         DateTime  @db.Date
+  firstRemandDate    DateTime? @db.Date
+  /// BNS sections exactly as entered from the FIR, e.g. "303(2)".
+  sections           String[]
+  /// Any charge under a law other than the BNS — disables computations
+  /// the engine cannot do safely.
+  otherLawCharges    Boolean   @default(false)
+  chargesheetFiledOn DateTime? @db.Date
+  priorConviction    TriState  @default(UNKNOWN)
+  otherPendingCases  TriState  @default(UNKNOWN)
+  inCustody          Boolean   @default(true)
+  remindersEnabled   Boolean   @default(true)
+  /// Reminder keys already emailed ("DEFAULT_BAIL_60:T-7"), so the
+  /// reminder job is idempotent no matter how often it runs.
+  remindersSent      String[]  @default([])
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  user               User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  case               Case?     @relation(fields: [caseId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([caseId])
+  @@index([remindersEnabled, inCustody])
+}
+
+enum TriState {
+  YES
+  NO
+  UNKNOWN
 }
 
 model Conversation {
@@ -380,6 +435,183 @@ enum Role {
   USER
   ADMIN
   RESEARCHER
+  LAWYER
+}
+
+// ==========================================================
+// Verified Lawyer Connect (lib/lawyers)
+// ----------------------------------------------------------
+// A neutral, non-commercial directory. Bar Council of India
+// Rule 36 forbids advocates from advertising or soliciting work,
+// and in 2024 the BCI ordered portals to remove lawyer listings.
+// So: only factual "permitted details" are stored and shown, there
+// are no ratings, no paid ranking, no fees, and results are
+// ordered by distance alone.
+//
+// No Aadhaar number is ever stored. Identity is established by the
+// thing that actually matters — Bar Council enrolment — reviewed
+// by an admin against uploaded certificates.
+// ==========================================================
+
+enum LawyerStatus {
+  /// Profile started, not yet submitted for review.
+  DRAFT
+  SUBMITTED
+  VERIFIED
+  REJECTED
+  /// Removed from the directory by an admin (e.g. a confirmed report).
+  SUSPENDED
+}
+
+enum LawyerDocumentType {
+  ENROLMENT_CERTIFICATE
+  PRACTICE_CERTIFICATE
+  PHOTO_ID
+  SELFIE_WITH_ID
+}
+
+model LawyerProfile {
+  id               String                @id @default(uuid())
+  userId           String                @unique
+  /// Name exactly as on the Bar Council enrolment certificate.
+  fullName         String
+  gender           String?
+  /// Private storage key of the profile photo (EXIF stripped).
+  photoKey         String?
+  /// State Bar Council code, e.g. "DL" — see lib/lawyers/constants.ts.
+  barCouncil       String
+  /// Normalised upper-case enrolment number, e.g. "D/1234/2015".
+  enrolmentNumber  String
+  enrolmentYear    Int
+  aibeNumber       String?
+  practiceAreas    String[]
+  courts           String[]
+  languages        String[]
+  /// Factual note only; promotional claims are rejected (Rule 36).
+  bio              String?
+  officeAddress    String
+  city             String
+  pincode          String
+  /// Office location — public, because it is a permitted detail.
+  latitude         Float
+  longitude        Float
+  legalAidPanel    Boolean               @default(false)
+  proBono          Boolean               @default(false)
+  acceptingClients Boolean               @default(true)
+  status           LawyerStatus          @default(DRAFT)
+  submittedAt      DateTime?
+  verifiedAt       DateTime?
+  reviewedAt       DateTime?
+  reviewedById     String?
+  rejectionReason  String?
+  /// Fictional profile created by scripts/seed-lawyers.ts — always
+  /// labelled "Demo" in the UI and never mistakable for a real advocate.
+  isDemo           Boolean               @default(false)
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+  user             User                  @relation("LawyerProfileOwner", fields: [userId], references: [id], onDelete: Cascade)
+  reviewedBy       User?                 @relation("LawyerProfileReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  documents        LawyerDocument[]
+  consultations    ConsultationRequest[]
+
+  /// One enrolment number, one account.
+  @@unique([barCouncil, enrolmentNumber])
+  @@index([status])
+  @@index([latitude, longitude])
+}
+
+/// Verification evidence. Private: readable only by the owner and admins.
+model LawyerDocument {
+  id          String             @id @default(uuid())
+  profileId   String
+  type        LawyerDocumentType
+  storageKey  String
+  contentType String
+  sizeBytes   Int
+  createdAt   DateTime           @default(now())
+  profile     LawyerProfile      @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  /// Re-uploading a type replaces it.
+  @@unique([profileId, type])
+}
+
+/// A citizen's search location, rounded to ~1 km before it is saved and
+/// never shown to lawyers.
+model UserLocation {
+  userId    String   @id
+  latitude  Float
+  longitude Float
+  label     String
+  pincode   String?
+  /// The address the user typed at sign-up (house / area / city).
+  /// Private: used only to compute distances, never shown to lawyers.
+  address   String?
+  /// "GPS" | "PINCODE" | "SEARCH" | "SIGNUP"
+  source    String
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+enum ConsultationStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  CANCELLED
+  CLOSED
+}
+
+model ConsultationRequest {
+  id              String                @id @default(uuid())
+  citizenId       String
+  lawyerProfileId String
+  /// Practice area key, e.g. "CRIMINAL".
+  category        String
+  language        String
+  /// "NORMAL" | "URGENT"
+  urgency         String                @default("NORMAL")
+  summary         String
+  status          ConsultationStatus    @default(PENDING)
+  declineReason   String?
+  respondedAt     DateTime?
+  closedAt        DateTime?
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+  citizen         User                  @relation(fields: [citizenId], references: [id], onDelete: Cascade)
+  lawyer          LawyerProfile         @relation(fields: [lawyerProfileId], references: [id], onDelete: Cascade)
+  messages        ConsultationMessage[]
+  shares          CaseShare[]
+
+  @@index([citizenId, status])
+  @@index([lawyerProfileId, status])
+}
+
+model ConsultationMessage {
+  id        String              @id @default(uuid())
+  requestId String
+  senderId  String
+  body      String
+  readAt    DateTime?
+  createdAt DateTime            @default(now())
+  request   ConsultationRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  sender    User                @relation(fields: [senderId], references: [id], onDelete: Cascade)
+
+  @@index([requestId, createdAt])
+}
+
+/// Consent record: the citizen lets the lawyer on one consultation read
+/// one case (Rights Clock trackers, FIR drafts, documents) read-only.
+/// Revoking sets revokedAt; access also ends when the consultation ends.
+model CaseShare {
+  id        String              @id @default(uuid())
+  requestId String
+  caseId    String
+  createdAt DateTime            @default(now())
+  revokedAt DateTime?
+  request   ConsultationRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  case      Case                @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@unique([requestId, caseId])
+  @@index([caseId])
 }
 
 enum CaseStatus {
@@ -481,20 +713,20 @@ model TranslationCache {
 /// remembered about them and delete any of it, which is only possible
 /// if it is stored as legible text rather than an opaque embedding.
 model UserMemory {
-  id        String   @id @default(uuid())
-  userId    String
+  id                   String   @id @default(uuid())
+  userId               String
   /// One fact, in plain language. e.g. "Lives in Ghaziabad, UP."
-  content   String
+  content              String
   /// Rough grouping so the UI can show these in sensible sections and
   /// the retriever can prefer durable facts over one-off details.
-  category  String   @default("general")
+  category             String   @default("general")
   /// Where it came from, so a user can trace a memory to the chat that
   /// produced it. Nulled rather than cascaded if that chat is deleted —
   /// deleting a conversation should not silently erase what was learned.
   sourceConversationId String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  user                 User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
 }
@@ -503,18 +735,18 @@ model UserMemory {
 /// Codes are stored hashed (never plaintext) since this table is a
 /// direct route to taking over an account if it ever leaked.
 model OtpCode {
-  id          String    @id @default(uuid())
+  id         String     @id @default(uuid())
   /// Keyed by email, not userId — needed during registration before
   /// the account row (and its id) exists yet.
-  email       String
-  codeHash    String
-  purpose     OtpPurpose
+  email      String
+  codeHash   String
+  purpose    OtpPurpose
   /// Failed verification attempts against this code. Capped so a
   /// 6-digit code cannot be brute-forced within its lifetime.
-  attempts    Int       @default(0)
-  expiresAt   DateTime
-  consumedAt  DateTime?
-  createdAt   DateTime  @default(now())
+  attempts   Int        @default(0)
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime   @default(now())
 
   @@index([email, purpose])
 }
@@ -522,4 +754,39 @@ model OtpCode {
 enum OtpPurpose {
   EMAIL_VERIFICATION
   PASSWORD_RESET
+}
+
+/// A phone call between a user and the AI legal helpline. LegalSetu calls
+/// the user (never the reverse), so every row begins with an explicit
+/// request from a signed-in account. The conversation it spoke is stored
+/// as ordinary Messages, so a call shows up in History like any chat.
+///
+/// The phone number itself is NOT stored: only a masked form for display
+/// and a salted hash so one number cannot be called repeatedly.
+model CallSession {
+  id             String    @id @default(uuid())
+  userId         String
+  /// The Conversation holding the spoken transcript.
+  conversationId String?
+  /// Twilio's id for the call; null until Twilio accepts the request.
+  callSid        String?   @unique
+  phoneMasked    String
+  phoneHash      String
+  language       String    @default("hi")
+  mode           String    @default("case")
+  /// REQUESTED | RINGING | IN_PROGRESS | COMPLETED | NO_ANSWER | BUSY | FAILED | CANCELED
+  status         String    @default("REQUESTED")
+  failureReason  String?
+  requestedAt    DateTime  @default(now())
+  answeredAt     DateTime?
+  endedAt        DateTime?
+  durationSec    Int?
+  turnCount      Int       @default(0)
+  /// Per-turn timings: how long the caller waited for each spoken reply.
+  metrics        Json?
+  smsStatus      String?
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, requestedAt])
+  @@index([phoneHash, requestedAt])
 }

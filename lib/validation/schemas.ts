@@ -1,9 +1,14 @@
 import { z } from "zod";
+import { signupAddressSchema } from "@/lib/lawyers/validation";
 
 export const registerSchema = z.object({
   name: z.string().min(2).max(100),
   email: z.string().email(),
   password: z.string().min(8).max(100),
+  /** LAWYER accounts complete an advocate profile and verification next. */
+  accountType: z.enum(["CITIZEN", "LAWYER"]).default("CITIZEN"),
+  /** Address (and optional GPS) — used to find lawyers near the user. */
+  location: signupAddressSchema,
 });
 
 export const loginSchema = z.object({

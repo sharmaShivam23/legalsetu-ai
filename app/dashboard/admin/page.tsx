@@ -1,12 +1,20 @@
 import Link from "next/link";
 import { Card, CardContent } from "@/components/ui/card";
-import { Database, BarChart3 } from "lucide-react";
+import { Database, BarChart3, BadgeCheck } from "lucide-react";
 
 export default function AdminHome() {
   return (
     <div className="mx-auto max-w-3xl px-6 py-12 text-textPrimary">
       <h1 className="text-2xl font-semibold text-textPrimary">Admin / Research Panel</h1>
       <div className="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <Link href="/dashboard/admin/lawyers" className="block">
+          <Card className="bg-card border-borderCustom shadow-sm transition-all duration-200 hover:border-brandBlue hover:shadow-md">
+            <CardContent className="flex items-center gap-3 p-5">
+              <BadgeCheck className="h-5 w-5 text-brandBlue" />
+              <span className="text-sm font-medium text-textPrimary">Verify Lawyers</span>
+            </CardContent>
+          </Card>
+        </Link>
         <Link href="/dashboard/admin/sources" className="block">
           <Card className="bg-card border-borderCustom shadow-sm transition-all duration-200 hover:border-brandBlue hover:shadow-md">
             <CardContent className="flex items-center gap-3 p-5">

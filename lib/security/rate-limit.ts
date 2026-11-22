@@ -35,6 +35,14 @@ export const RATE_LIMITS: Record<string, RateLimitConfig> = {
   // code a couple of times is never locked out of their own signup.
   otpSend: { windowMs: 15 * 60 * 1000, max: 4 },
   otpVerify: { windowMs: 15 * 60 * 1000, max: 10 },
+  // Verified Lawyer Connect
+  lawyerUpload: { windowMs: 60 * 60 * 1000, max: 30 },
+  consultationCreate: { windowMs: 60 * 60 * 1000, max: 10 },
+  consultationMessage: { windowMs: 60 * 1000, max: 30 },
+  // Each call costs real money and rings a real phone: a few per hour is plenty.
+  callRequest: { windowMs: 60 * 60 * 1000, max: 5 },
+  // Each location change may call the geocoder (1 req/s upstream limit).
+  locationLookup: { windowMs: 60 * 1000, max: 10 },
 };
 
 const memoryStore = new Map<string, { count: number; resetAt: number }>();

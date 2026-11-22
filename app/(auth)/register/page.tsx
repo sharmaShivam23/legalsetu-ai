@@ -5,7 +5,8 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { signIn } from "next-auth/react";
-import { Scale, Mail, Lock, User, Loader2, ArrowRight, ShieldCheck, ArrowLeft, MailCheck } from "lucide-react";
+import { Scale, Mail, Lock, User, Loader2, ArrowRight, ShieldCheck, ArrowLeft, MailCheck, Gavel, Users } from "lucide-react";
+import { EMPTY_SIGNUP_ADDRESS, SignupAddressFields, type SignupAddressValue } from "@/components/lawyers/signup-address";
 import { Input } from "@/components/ui/input";
 import { OtpInput } from "@/components/auth/otp-input";
 import { toast } from "sonner";
@@ -15,7 +16,8 @@ const RESEND_COOLDOWN_S = 45;
 export default function RegisterPage() {
   const router = useRouter();
   const [step, setStep] = useState<"form" | "verify">("form");
-  const [form, setForm] = useState({ name: "", email: "", password: "" });
+  const [address, setAddress] = useState<SignupAddressValue>(EMPTY_SIGNUP_ADDRESS);
+  const [form, setForm] = useState({ name: "", email: "", password: "", accountType: "CITIZEN" as "CITIZEN" | "LAWYER" });
   const [loading, setLoading] = useState(false);
   const [devMode, setDevMode] = useState(false);
 
@@ -44,6 +46,14 @@ export default function RegisterPage() {
       toast.error("Password must be at least 8 characters long.");
       return false;
     }
+    if (address.address.trim().length < 5) {
+      toast.error("Please enter your address, or use your current location.");
+      return false;
+    }
+    if (!/^[1-9][0-9]{5}$/.test(address.pincode)) {
+      toast.error("Please enter a valid 6-digit PIN code.");
+      return false;
+    }
     return true;
   };
 
@@ -56,7 +66,7 @@ export default function RegisterPage() {
       const res = await fetch("/api/auth/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(form),
+        body: JSON.stringify({ ...form, location: address }),
       });
 
       const data = await res.json();
@@ -108,7 +118,10 @@ export default function RegisterPage() {
         router.push("/login");
         return;
       }
-      router.push("/dashboard");
+      // Advocates go straight to profile + verification; citizens set
+      // their location so "Find a Lawyer" works from the first visit.
+      if (form.accountType === "LAWYER") router.push("/dashboard/advocate/profile");
+      else router.push("/dashboard/lawyers");
     } catch {
       setVerifyError(true);
       toast.error("Could not verify your code. Please try again.");
@@ -217,6 +230,40 @@ export default function RegisterPage() {
               <p className="text-slate-500 dark:text-slate-400 mb-10 text-sm">Join LegalSetu to understand your rights in your language.</p>
 
               <form onSubmit={handleSubmit} className="space-y-5 scene-3d">
+                <fieldset className="space-y-2">
+                  <legend className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">I am…</legend>
+                  <div className="grid grid-cols-2 gap-3 pt-2">
+                    {(
+                      [
+                        { key: "CITIZEN", title: "Looking for legal help", note: "Citizen", icon: Users },
+                        { key: "LAWYER", title: "An advocate", note: "Enrolled with a Bar Council", icon: Gavel },
+                      ] as const
+                    ).map((o) => (
+                      <button
+                        key={o.key}
+                        type="button"
+                        aria-pressed={form.accountType === o.key}
+                        onClick={() => setForm({ ...form, accountType: o.key })}
+                        className={
+                          "flex flex-col items-start gap-1 rounded-xl border p-3 text-left transition-colors " +
+                          (form.accountType === o.key
+                            ? "border-indigo-600 bg-indigo-50 ring-2 ring-indigo-600/30 dark:bg-indigo-500/10"
+                            : "border-slate-200 bg-white hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900")
+                        }
+                      >
+                        <o.icon className="h-5 w-5 text-indigo-600 dark:text-indigo-400" />
+                        <span className="text-sm font-bold text-slate-900 dark:text-white">{o.title}</span>
+                        <span className="text-[11px] text-slate-500 dark:text-slate-400">{o.note}</span>
+                      </button>
+                    ))}
+                  </div>
+                  {form.accountType === "LAWYER" && (
+                    <p className="text-xs leading-relaxed text-slate-500 dark:text-slate-400">
+                      After sign-up you will add your Bar Council enrolment and documents. You appear in the directory only once an admin has verified them.
+                    </p>
+                  )}
+                </fieldset>
+
                 <div className="space-y-2">
                   <label className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Full Name</label>
                   <div className="input-float relative rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 shadow-xs">
@@ -257,6 +304,8 @@ export default function RegisterPage() {
                     />
                   </div>
                 </div>
+
+                <SignupAddressFields value={address} onChange={setAddress} />
 
                 <button
                   type="submit"

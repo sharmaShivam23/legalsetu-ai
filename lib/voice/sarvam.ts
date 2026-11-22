@@ -264,7 +264,9 @@ export async function sarvamTranscribe(
 export async function sarvamSpeak(
   text: string,
   languageCode: string,
-  speaker = DEFAULT_SPEAKER
+  speaker = DEFAULT_SPEAKER,
+  /** 22050 for the web player; 8000 for phone calls, so no resampling is needed. */
+  sampleRate = 22050
 ): Promise<Buffer> {
   const res = await callSarvam(
     TTS_URL,
@@ -276,7 +278,7 @@ export async function sarvamSpeak(
         language_code: languageCode,
         model: TTS_MODEL,
         speaker,
-        speech_sample_rate: 22050,
+        speech_sample_rate: sampleRate,
       }),
     }),
     "tts"

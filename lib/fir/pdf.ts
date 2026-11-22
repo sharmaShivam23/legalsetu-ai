@@ -49,6 +49,8 @@ export interface ComplaintDocument {
   signatureName: string;
   /** Rendered in the footer of every page. */
   footerNote: string;
+  /** Line under the header rule. Defaults to the complaint wording. */
+  preparedNote?: string;
 }
 
 /**
@@ -146,7 +148,7 @@ export function renderComplaintPdf(docData: ComplaintDocument): Buffer {
   doc.line(MARGIN, cursor.y, A4_WIDTH - MARGIN, cursor.y);
   cursor.y += 5;
 
-  write("Draft prepared from information provided by the complainant.", {
+  write(docData.preparedNote ?? "Draft prepared from information provided by the complainant.", {
     size: 8.5,
     gapAfter: 6,
   });

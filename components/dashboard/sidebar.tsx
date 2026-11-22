@@ -19,19 +19,42 @@ import { cn } from "@/lib/utils/cn";
 import { LanguageSwitcher } from "@/components/i18n/LanguageSwitcher";
 import { ThemeToggle } from "@/components/common/ThemeToggle";
 
-const NAV_ITEMS = [
+type NavItem = { href: string; label: string };
+
+const NAV_ITEMS: NavItem[] = [
   { href: "/dashboard", label: "Dashboard" },
   { href: "/dashboard/chat", label: "Ask LegalSetu" },
+  { href: "/dashboard/calls", label: "Call Helpline" },
   { href: "/dashboard/cases", label: "My Cases" },
   { href: "/dashboard/documents", label: "Documents OCR" },
   { href: "/dashboard/fir", label: "FIR Assistant" },
+  { href: "/dashboard/rights-clock", label: "Rights Clock" },
+  { href: "/dashboard/lawyers", label: "Find a Lawyer" },
+  { href: "/dashboard/consultations", label: "Consultations" },
   { href: "/dashboard/sources", label: "Saved Sources" },
-  { href: "/dashboard/lawyer", label: "Lawyer / Legal Aid" },
+  { href: "/dashboard/lawyer", label: "Legal Aid" },
   { href: "/dashboard/history", label: "History" },
   { href: "/dashboard/settings", label: "Settings" },
 ];
 
-export function Sidebar() {
+const ADVOCATE_ITEMS: NavItem[] = [
+  { href: "/dashboard/advocate", label: "Client Desk" },
+  { href: "/dashboard/advocate/profile", label: "Advocate Profile" },
+];
+
+const ADMIN_ITEMS: NavItem[] = [{ href: "/dashboard/admin/lawyers", label: "Verify Lawyers" }];
+
+/** Active when the path is the item or below it — "/dashboard/lawyer" must not light up on "/dashboard/lawyers". */
+function isActive(pathname: string | null, href: string, all: NavItem[]): boolean {
+  if (!pathname) return false;
+  if (href === "/dashboard") return pathname === "/dashboard";
+  const matches = pathname === href || pathname.startsWith(href + "/");
+  // Prefer the most specific item: "/dashboard/advocate/profile" over "/dashboard/advocate".
+  return matches && !all.some((o) => o.href.length > href.length && (pathname === o.href || pathname.startsWith(o.href + "/")));
+}
+
+/** role comes from the database (dashboard layout), not the session token. */
+export function Sidebar({ role }: { role?: string } = {}) {
   const pathname = usePathname();
   const { data: session } = useSession();
   const [isMobileOpen, setIsMobileOpen] = useState(false);
@@ -142,10 +165,14 @@ export function Sidebar() {
 
         {/* Navigation Links */}
         <nav className="flex-1 space-y-1 px-3 overflow-y-auto overflow-x-hidden scrollbar-thin">
-          {NAV_ITEMS.map((item) => {
-            const active = item.href === "/dashboard" 
-              ? pathname === "/dashboard" 
-              : pathname?.startsWith(item.href);
+          {(() => {
+            const items = [
+              ...NAV_ITEMS,
+              ...(role === "LAWYER" ? ADVOCATE_ITEMS : []),
+              ...(role === "ADMIN" ? ADMIN_ITEMS : []),
+            ];
+            return items.map((item) => {
+            const active = isActive(pathname, item.href, items);
 
             return (
               <Link
@@ -173,7 +200,8 @@ export function Sidebar() {
                 )}
               </Link>
             );
-          })}
+          });
+          })()}
         </nav>
 
         {/* Footer Controls: Language Selector, Theme Toggle & User Logout */}

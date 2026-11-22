@@ -3,7 +3,8 @@ import { auth } from "@/lib/auth/auth";
 import { apiError } from "@/lib/utils/api-response";
 import { chatMessageSchema } from "@/lib/validation/schemas";
 import { retrieveRelevantChunks } from "@/lib/rag/retriever";
-import { buildRAGMessages, buildLanguageDirective, type ChatMode } from "@/lib/rag/prompt";
+import { buildRAGMessages, buildLanguageDirective, PHONE_CALL_RULES, type ChatMode } from "@/lib/rag/prompt";
+import { verifyCallToken, callTokenFromHeaders } from "@/lib/calls/token";
 import { isSmallTalk, buildSmallTalkPrompt } from "@/lib/rag/smalltalk";
 import { runInvestigationTurn } from "@/lib/fir/investigator";
 import { generateComplaintDraft, buildNarrative } from "@/lib/fir/draft-generator";
@@ -64,11 +65,21 @@ const VOICE_TOP_K = 3;
  *   error     -> a user-readable failure message
  */
 export async function POST(req: NextRequest) {
-  const session = await auth();
-  if (!session?.user) {
+  // A phone call authenticates with the signed token the voice bridge holds
+  // for that one call, instead of a browser session. The token fixes the
+  // user, conversation and mode, so a leaked one cannot reach anything else.
+  const callToken = callTokenFromHeaders(req.headers);
+  const callPayload = callToken ? verifyCallToken(callToken) : null;
+  if (callToken && !callPayload) {
+    return apiError("UNAUTHORIZED", "This call is no longer valid.", 401);
+  }
+  const isPhone = callPayload !== null;
+
+  const session = isPhone ? null : await auth();
+  if (!isPhone && !session?.user) {
     return apiError("UNAUTHORIZED", "You must be signed in.", 401);
   }
-  const userId = (session.user as any).id as string;
+  const userId = isPhone ? callPayload.uid : ((session!.user as any).id as string);
 
   const rateLimit = await checkRateLimit(userId, "aiGeneration");
   if (!rateLimit.success) {
@@ -81,7 +92,10 @@ export async function POST(req: NextRequest) {
     return apiError("VALIDATION_ERROR", "Invalid message.", 422);
   }
 
-  const { content, language, mode, voice, modelId } = parsed.data;
+  const { content, language, modelId } = parsed.data;
+  // On a call the token, not the request body, decides these.
+  const mode = isPhone ? (callPayload.mode as ChatMode) : parsed.data.mode;
+  const voice = isPhone ? true : parsed.data.voice;
   const encoder = new TextEncoder();
 
   // Usage check (import from lib/ai/usage and models)
@@ -129,7 +143,7 @@ export async function POST(req: NextRequest) {
           kind: string | null;
         }[] = [];
 
-        let conversationId = parsed.data.conversationId;
+        let conversationId = isPhone ? callPayload.conv : parsed.data.conversationId;
         if (conversationId) {
           const owned = await prisma.conversation.findFirst({
             where: { id: conversationId, userId },
@@ -258,7 +272,7 @@ export async function POST(req: NextRequest) {
             nextState = { ...nextState, legalContext, narrative };
             const generated = await generateComplaintDraft(
               nextState,
-              session.user.name ?? undefined
+              session?.user?.name ?? undefined
             );
             // Markdown, not the flat text: the chat renders markdown, and
             // the flat version arrived as one unreadable paragraph.
@@ -447,10 +461,11 @@ export async function POST(req: NextRequest) {
         // Appended to the leading system message rather than added as a
         // separate turn, so it cannot be mistaken for something the user
         // said in this conversation.
-        const messages = memoryBlock
+        const extraSystem = (memoryBlock ?? "") + (isPhone ? PHONE_CALL_RULES : "");
+        const messages = extraSystem
           ? baseMessages.map((m, i) =>
               i === 0 && m.role === "system"
-                ? { ...m, content: m.content + memoryBlock }
+                ? { ...m, content: m.content + extraSystem }
                 : m
             )
           : baseMessages;
@@ -503,7 +518,7 @@ export async function POST(req: NextRequest) {
           // (at most four sentences) fits easily in 1500. The smaller request
           // also fits under Groq's free 8k tokens-per-minute cap, which a
           // 5000-token voice request in Case mode did not.
-          maxTokens: voice ? 1500 : mode === "case" ? 5000 : mode === "knowledge" ? 3500 : 3000,
+          maxTokens: isPhone ? 900 : voice ? 1500 : mode === "case" ? 5000 : mode === "knowledge" ? 3500 : 3000,
         })) {
           // Several fallbacks may be tried before one produces text; only
           // the provider that actually answers is worth telling the user.

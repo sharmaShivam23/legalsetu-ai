@@ -16,7 +16,7 @@ export async function GET() {
   if (!session?.user) return apiError("UNAUTHORIZED", "Sign in required.", 401);
   const userId = (session.user as any).id as string;
 
-  const [user, conversations, cases, firDrafts, documents, savedSources, memories, referrals] = await Promise.all([
+  const [user, conversations, cases, firDrafts, documents, savedSources, memories, referrals, custodyTrackers] = await Promise.all([
     prisma.user.findUnique({
       where: { id: userId },
       select: { name: true, email: true, createdAt: true },
@@ -36,6 +36,24 @@ export async function GET() {
     prisma.savedSource.findMany({ where: { userId } }),
     prisma.userMemory.findMany({ where: { userId }, select: { content: true, category: true, createdAt: true } }),
     prisma.lawyerReferral.findMany({ where: { userId } }),
+    prisma.custodyTracker.findMany({ where: { userId } }),
+  ]);
+
+  // Verified Lawyer Connect. Internal storage keys are left out — they are
+  // not the user's data, only where it is kept.
+  const [lawyerProfile, location, consultations] = await Promise.all([
+    prisma.lawyerProfile.findUnique({
+      where: { userId },
+      include: { documents: { select: { type: true, contentType: true, sizeBytes: true, createdAt: true } } },
+    }),
+    prisma.userLocation.findUnique({ where: { userId } }),
+    prisma.consultationRequest.findMany({
+      where: { OR: [{ citizenId: userId }, { lawyer: { userId } }] },
+      include: {
+        messages: { select: { senderId: true, body: true, createdAt: true }, orderBy: { createdAt: "asc" } },
+        shares: { select: { caseId: true, createdAt: true, revokedAt: true } },
+      },
+    }),
   ]);
 
   const payload = {
@@ -48,6 +66,11 @@ export async function GET() {
     savedSources,
     memories,
     referrals,
+    custodyTrackers,
+    // undefined is dropped by JSON.stringify
+    lawyerProfile: lawyerProfile ? { ...lawyerProfile, photoKey: undefined } : null,
+    location,
+    consultations,
   };
 
   return new Response(JSON.stringify(payload, null, 2), {
