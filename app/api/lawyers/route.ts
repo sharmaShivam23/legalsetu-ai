@@ -5,8 +5,9 @@
 // &radiusKm=5|10|25|50   optional — omitted means ALL distances
 // &area &language &court &gender &legalAid=1 &available=1 &page
 //
-// Every listed advocate is returned by default, nearest first from the
-// user's address. Without any location they are listed by name.
+// &all=1  list everyone by name, ignoring the user's saved address.
+// Otherwise every listed advocate is returned, nearest first from the
+// user's address; without any location they are listed by name.
 // No ratings, no paid placement (BCI Rule 36).
 // ==========================================================
 
@@ -29,7 +30,9 @@ export async function GET(req: NextRequest) {
   let lat = p.lat;
   let lng = p.lng;
   let label: string | null = null;
-  if (lat === undefined || lng === undefined) {
+  // ?all=1 means "everyone, A to Z": do not fall back to the saved address.
+  const wantAll = req.nextUrl.searchParams.get("all") === "1";
+  if (!wantAll && (lat === undefined || lng === undefined)) {
     const saved = await prisma.userLocation.findUnique({ where: { userId: g.user.id } });
     lat = saved?.latitude;
     lng = saved?.longitude;

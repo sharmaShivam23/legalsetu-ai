@@ -1,5 +1,7 @@
 "use client";
 
+import { readApi } from "./api";
+
 import { useState } from "react";
 import { Loader2, LocateFixed, MapPin, Search } from "lucide-react";
 import { cn } from "@/lib/utils/cn";
@@ -43,7 +45,7 @@ export function LocationPicker({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      const json = await res.json();
+      const json = await readApi(res);
       if (!json.success) {
         setError(json.error?.message ?? "Could not set the location.");
         return;

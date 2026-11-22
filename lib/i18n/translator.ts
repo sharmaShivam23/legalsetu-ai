@@ -20,6 +20,7 @@
 // ==========================================================
 
 import { getAIProvider } from "@/lib/ai/provider";
+import { isOllamaMode } from "@/lib/ai/mode";
 import { generateCompletion } from "@/lib/ai/llm";
 import { canUseSarvamTranslation, sarvamTranslateMany } from "./sarvam-translate";
 import { logger } from "@/lib/logging/logger";
@@ -33,6 +34,8 @@ import { DEFAULT_LANGUAGE, languageName, normalizeLanguage } from "./languages";
 
 /** Strings sent to the model in a single call. */
 const BATCH_SIZE = 40;
+/** Batch size when the local Ollama model does the translating. */
+const LOCAL_BATCH_SIZE = 12;
 
 /**
  * How many LLM batches may be in flight at once.
@@ -229,7 +232,9 @@ export async function translateBatchDetailed(
     // Maithili, Bhojpuri, Santali, or a transient failure) drops
     // through to the LLM path below rather than being lost.
     let pending = misses;
-    if (canUseSarvamTranslation(target)) {
+    // Ollama mode: no cloud calls, so Sarvam is skipped entirely.
+    const local = isOllamaMode();
+    if (!local && canUseSarvamTranslation(target)) {
       try {
         const { translations: viaSarvam, failed } = await sarvamTranslateMany(misses, target);
         viaSarvam.forEach((value, key) => {
@@ -247,9 +252,13 @@ export async function translateBatchDetailed(
     }
 
     // ---- Tier 2: the chat LLM --------------------------------------
+    // A small CPU model cannot take 40 strings at once: smaller batches,
+    // one at a time.
+    const batchSize = local ? LOCAL_BATCH_SIZE : BATCH_SIZE;
+    const concurrency = local ? 1 : MAX_CONCURRENT_BATCHES;
     const batches: string[][] = [];
-    for (let i = 0; i < pending.length; i += BATCH_SIZE) {
-      batches.push(pending.slice(i, i + BATCH_SIZE));
+    for (let i = 0; i < pending.length; i += batchSize) {
+      batches.push(pending.slice(i, i + batchSize));
     }
 
     // Batches run CONCURRENTLY, in waves of MAX_CONCURRENT_BATCHES.
@@ -264,8 +273,8 @@ export async function translateBatchDetailed(
     // shares one provider's per-minute request limit; firing twenty at
     // once would trade a slow page for a 429 and a page that never
     // translates at all.
-    for (let i = 0; i < batches.length; i += MAX_CONCURRENT_BATCHES) {
-      const wave = batches.slice(i, i + MAX_CONCURRENT_BATCHES);
+    for (let i = 0; i < batches.length; i += concurrency) {
+      const wave = batches.slice(i, i + concurrency);
 
       const settled = await Promise.all(
         wave.map(async (chunk) => {

@@ -1,5 +1,7 @@
 "use client";
 
+import { readApi } from "./api";
+
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { ChevronRight, MessagesSquare, Search } from "lucide-react";
@@ -56,7 +58,7 @@ export function ConsultationList() {
 
   useEffect(() => {
     fetch("/api/consultations")
-      .then((r) => r.json())
+      .then(readApi)
       .then((j) => {
         if (!j.success) return setError(true);
         setData(j.data);

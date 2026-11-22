@@ -21,6 +21,7 @@ import ReactMarkdown from "react-markdown";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import remarkGfm from "remark-gfm";
 import { ModelSelector } from "@/components/chat/model-selector";
+import { OllamaModeToggle } from "@/components/chat/ollama-mode-toggle";
 
 interface ChatMessage {
   id: string;
@@ -131,6 +132,7 @@ export default function ChatPage() {
 
   // Selected AI Model
   const [modelId, setModelId] = useState<string>("auto");
+  const [ollamaOn, setOllamaOn] = useState(false);
   useEffect(() => {
     try {
       const saved = localStorage.getItem("ls_chat_model");
@@ -788,7 +790,17 @@ export default function ChatPage() {
           </div>
         </div>
         <div className="flex items-center gap-2 pointer-events-auto">
-          <ModelSelector selectedModelId={modelId} onModelChange={handleModelChange} />
+          <OllamaModeToggle onChange={setOllamaOn} />
+          {ollamaOn ? (
+            <div
+              className="glass-pane rounded-full border border-borderCustom bg-card/80 px-3 py-1.5 text-xs font-medium text-textSecondary shadow-sm"
+              data-no-translate
+            >
+              Local (Ollama)
+            </div>
+          ) : (
+            <ModelSelector selectedModelId={modelId} onModelChange={handleModelChange} />
+          )}
 
           {/* Text size for the conversation */}
           <div

@@ -1,5 +1,7 @@
 "use client";
 
+import { readApi } from "./api";
+
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -32,7 +34,7 @@ function RequestForm({ lawyer, onSent }: { lawyer: PublicLawyerCard; onSent: (id
 
   useEffect(() => {
     fetch("/api/cases")
-      .then((r) => r.json())
+      .then(readApi)
       .then((j) => setCases(j.success ? j.data.cases.map((c: CaseOption) => ({ id: c.id, title: c.title })) : []))
       .catch(() => setCases([]));
   }, []);
@@ -49,7 +51,7 @@ function RequestForm({ lawyer, onSent }: { lawyer: PublicLawyerCard; onSent: (id
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ lawyerId: lawyer.id, category, language, urgency, summary, caseId: caseId || null }),
       });
-      const json = await res.json();
+      const json = await readApi(res);
       if (!json.success) return setError(json.error?.message ?? "Could not send the request.");
       onSent(json.data.consultation.id);
     } catch {
@@ -181,7 +183,7 @@ export function LawyerProfileView({ id }: { id: string }) {
     fetch(`/api/lawyers/${id}`)
       .then(async (r) => {
         if (r.status === 404) return setNotFound(true);
-        const j = await r.json();
+        const j = await readApi(r);
         if (j.success) setData(j.data);
         else setNotFound(true);
       })

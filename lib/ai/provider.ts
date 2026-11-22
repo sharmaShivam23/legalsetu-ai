@@ -85,6 +85,7 @@ export interface AIProvider {
 
 import { getModelById, getAutoFallbackSequence, AIModel } from "./models";
 import { getAvailableKeys } from "./key-pool";
+import { isOllamaMode } from "./mode";
 
 export async function createProviderInstance(model: AIModel): Promise<AIProvider> {
   switch (model.provider) {
@@ -151,6 +152,13 @@ async function hasKeysForProvider(providerName: string): Promise<boolean> {
 }
 
 export async function getAIProvider(modelId?: string): Promise<AIProvider> {
+  // Ollama mode overrides everything: whatever model was asked for, the
+  // local server answers.
+  if (isOllamaMode()) {
+    const { OllamaProvider } = await import("./ollama");
+    return new OllamaProvider();
+  }
+
   if (modelId === "auto") {
     const sequence = getAutoFallbackSequence();
     for (const fallbackModel of sequence) {
@@ -188,6 +196,8 @@ export async function getFallbackChatProvider(
  * should try each in turn rather than stopping at the first.
  */
 export async function getFallbackChatProviders(primaryName: string): Promise<AIProvider[]> {
+  // Ollama mode means no cloud calls at all, even as a fallback.
+  if (isOllamaMode()) return [];
   const out: AIProvider[] = [];
   const seen = new Set<string>([primaryName]);
   for (const fallbackModel of getAutoFallbackSequence()) {

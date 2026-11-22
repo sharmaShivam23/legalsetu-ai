@@ -33,6 +33,7 @@ export async function uploadFile(url: string, file: Blob, fields: Record<string,
   form.append("file", file, "upload");
   const res = await fetch(url, { method: "POST", body: form });
   const json = await res.json().catch(() => null);
-  if (!json?.success) throw new Error(json?.error?.message ?? "Upload failed. Please try again.");
+  if (!json) throw new Error("The server had a problem saving the file. Please try again in a moment.");
+  if (!json.success) throw new Error(json.error?.message ?? "Upload failed. Please try again.");
   return json.data;
 }

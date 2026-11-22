@@ -11,11 +11,11 @@ import { consultationActionSchema } from "@/lib/lawyers/validation";
 import { nextStatus } from "@/lib/lawyers/consultation-rules";
 import { audit, notifyLater } from "@/lib/lawyers/server";
 import { consultationInclude, loadForParty, messageStats, serializeConsultation } from "@/lib/lawyers/consultations";
-import { firstIssue, readJson, requireUser } from "@/lib/lawyers/http";
+import { firstIssue, readJson, requireUser, safeRoute } from "@/lib/lawyers/http";
 
 type Params = { params: Promise<{ id: string }> };
 
-export async function GET(_req: NextRequest, { params }: Params) {
+async function getHandler(_req: NextRequest, { params }: Params) {
   const g = await requireUser();
   if (g.error) return g.error;
   const { id } = await params;
@@ -27,7 +27,7 @@ export async function GET(_req: NextRequest, { params }: Params) {
 
 const PAST: Record<string, string> = { accept: "accepted", decline: "declined", cancel: "cancelled", close: "closed" };
 
-export async function PATCH(req: NextRequest, { params }: Params) {
+async function patchHandler(req: NextRequest, { params }: Params) {
   const g = await requireUser("apiDefault");
   if (g.error) return g.error;
   const { id } = await params;
@@ -83,3 +83,7 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   const s = (await messageStats([id], g.user.id)).get(id)!;
   return apiSuccess({ consultation: serializeConsultation(updated, party, s.unread, s.last) });
 }
+
+export const GET = safeRoute("consultation GET", getHandler);
+
+export const PATCH = safeRoute("consultation PATCH", patchHandler);

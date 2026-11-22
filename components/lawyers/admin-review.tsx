@@ -1,5 +1,7 @@
 "use client";
 
+import { readApi } from "./api";
+
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, CheckCircle2, ChevronRight, ExternalLink, FileText, Loader2, XCircle } from "lucide-react";
@@ -30,7 +32,7 @@ export function AdminLawyerQueue() {
   useEffect(() => {
     setData(null);
     fetch(`/api/admin/lawyers?status=${status}`)
-      .then((r) => r.json())
+      .then(readApi)
       .then((j) => (j.success ? setData(j.data) : setError(j.error?.message ?? "Could not load.")))
       .catch(() => setError("Could not reach the server."));
   }, [status]);
@@ -125,7 +127,7 @@ export function AdminLawyerReview({ id }: { id: string }) {
 
   const load = useCallback(() => {
     fetch(`/api/admin/lawyers/${id}`)
-      .then((r) => r.json())
+      .then(readApi)
       .then((j) => (j.success ? setD(j.data) : setError(j.error?.message ?? "Could not load.")))
       .catch(() => setError("Could not reach the server."));
   }, [id]);
@@ -144,7 +146,7 @@ export function AdminLawyerReview({ id }: { id: string }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ decision, reason: reason.trim() || null }),
       });
-      const j = await r.json();
+      const j = await readApi(r);
       if (!j.success) return setError(j.error?.message ?? "Could not save the decision.");
       setDone(`Saved: now ${j.data.status.toLowerCase()}.`);
       setReason("");

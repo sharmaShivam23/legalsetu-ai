@@ -25,7 +25,7 @@
     "voice:smoke": "tsx scripts/voice-smoke.ts",
     "i18n:packs": "tsx scripts/build-language-packs.ts",
     "rights-clock:build": "tsx scripts/build-bns-punishments.ts",
-    "lawyers:seed": "tsx scripts/seed-lawyers.ts",
+    "lawyers:seed": "tsx --env-file=.env scripts/seed-lawyers.ts",
     "voice:bridge": "tsx voice-bridge/server.ts",
     "call:simulate": "tsx scripts/call-simulator.ts"
   },

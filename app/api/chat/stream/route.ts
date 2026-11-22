@@ -102,9 +102,15 @@ export async function POST(req: NextRequest) {
   const { getModelById } = await import("@/lib/ai/models");
   const { incrementAndCheckUsage } = await import("@/lib/ai/usage");
   
-  const model = getModelById(modelId);
-  const usage = await incrementAndCheckUsage(userId, model.provider, model.id);
-  
+  // Ollama mode runs on this machine: it always uses the local model and
+  // has no daily allowance.
+  const { isOllamaMode } = await import("@/lib/ai/mode");
+  const localMode = isOllamaMode();
+  const model = getModelById(localMode ? "ollama-local" : modelId);
+  const usage = localMode
+    ? { allowed: true }
+    : await incrementAndCheckUsage(userId, model.provider, model.id);
+
   if (!usage.allowed) {
     return apiError("DAILY_USER_LIMIT", `Daily limit reached for ${model.name}. Please try another model or try again tomorrow.`, 429);
   }

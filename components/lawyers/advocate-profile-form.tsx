@@ -1,5 +1,7 @@
 "use client";
 
+import { readApi } from "./api";
+
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
@@ -29,6 +31,7 @@ import { checkEnrolment, normaliseEnrolment, promotionalProblems } from "@/lib/l
 import { LawyerMap } from "./map";
 import { Avatar, StatusPill } from "./ui";
 import { prepareFile, uploadFile } from "./upload";
+import { AadhaarPdfError, maskAadhaar } from "./mask-aadhaar";
 
 interface Doc {
   id: string;
@@ -192,7 +195,7 @@ export function AdvocateProfileForm() {
 
   async function load() {
     const r = await fetch("/api/lawyer/profile");
-    const j = await r.json();
+    const j = await readApi(r);
     if (!j.success) return setProfile(null);
     setRole(j.data.role);
     setProfile(j.data.profile);
@@ -222,7 +225,7 @@ export function AdvocateProfileForm() {
     setMessage(null);
     try {
       const r = await fetch(`/api/geocode?pincode=${form.pincode}`);
-      const j = await r.json();
+      const j = await readApi(r);
       if (!j.success) return setMessage({ kind: "error", text: j.error?.message ?? "PIN code not found." });
       setForm((f) => ({ ...f, latitude: j.data.point.latitude, longitude: j.data.point.longitude, city: f.city || j.data.point.label.split(",").pop()!.trim() }));
     } finally {
@@ -267,7 +270,7 @@ export function AdvocateProfileForm() {
           bio: form.bio || null,
         }),
       });
-      const j = await r.json();
+      const j = await readApi(r);
       if (!j.success) return setMessage({ kind: "error", text: j.error?.message ?? "Could not save." });
       setProfile(j.data.profile);
       setForm(fromProfile(j.data.profile));
@@ -289,7 +292,22 @@ export function AdvocateProfileForm() {
       if (kind === "photo") {
         await uploadFile("/api/lawyer/profile/photo", await prepareFile(file, 600));
       } else {
-        await uploadFile("/api/lawyer/documents", await prepareFile(file, 2000), { type: kind });
+        let prepared = await prepareFile(file, 2000);
+        // Cover any Aadhaar number (all but the last 4 digits) before upload,
+        // in the browser, so the full number never leaves this device.
+        let note: string | null = null;
+        try {
+          const result = await maskAadhaar(prepared, file);
+          prepared = result.file;
+          if (result.masked) note = "An Aadhaar number was found and automatically masked (only the last 4 digits are kept).";
+        } catch (err) {
+          if (err instanceof AadhaarPdfError) throw err;
+          // The scanner itself could not run (e.g. offline): do not block the
+          // upload, but say the automatic check did not happen.
+          note = "Uploaded, but we could not run the automatic Aadhaar check. Make sure this document does not show a full Aadhaar number.";
+        }
+        await uploadFile("/api/lawyer/documents", prepared, { type: kind });
+        if (note) setMessage({ kind: "ok", text: note });
       }
       await load();
     } catch (err) {
@@ -304,7 +322,7 @@ export function AdvocateProfileForm() {
     setMessage(null);
     try {
       const r = await fetch("/api/lawyer/profile/submit", { method: "POST" });
-      const j = await r.json();
+      const j = await readApi(r);
       if (!j.success) return setMessage({ kind: "error", text: j.error?.message ?? "Could not submit." });
       setProfile(j.data.profile);
       setMessage({ kind: "ok", text: "Submitted for verification. We will email you when it is reviewed." });

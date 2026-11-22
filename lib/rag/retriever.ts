@@ -2,6 +2,8 @@
 
 import { prisma } from "@/lib/db/prisma";
 import { embedText, cosineSimilarity } from "@/lib/ai/embeddings";
+import { isOllamaMode } from "@/lib/ai/mode";
+import { generateCompletion } from "@/lib/ai/llm";
 import { extractSectionNumber } from "./sections";
 import { logger } from "@/lib/logging/logger";
 import type {
@@ -71,24 +73,37 @@ export async function retrieveRelevantChunks(
   // query vector there is nothing to search, so we report "no sources"
   // instead of failing the whole request — the grounding prompt then
   // makes the model say it lacks sources rather than inventing any.
-  let queryEmbedding: number[];
-  try {
-    queryEmbedding = await embedQuery(query);
-  } catch {
-    return { chunks: [], evidenceLevel: "INSUFFICIENT" };
-  }
-
   let chunks: RetrievedChunk[] = [];
 
-  try {
-    chunks = await vectorSearchSQL(queryEmbedding, filters);
-  } catch (err) {
-    // Log the real reason the primary SQL path failed — silently
-    // swallowing this made past failures impossible to diagnose.
-    logger.warn("Vector SQL search failed, using in-memory fallback", {
-      errorType: String(err).slice(0, 200),
-    });
-    chunks = await vectorSearchInMemory(queryEmbedding, filters);
+  if (isOllamaMode()) {
+    // No cloud embeddings in Ollama mode (the stored vectors are Gemini's,
+    // and Ollama's are a different size), so search the text itself.
+    try {
+      chunks = await keywordSearchSQL(await englishKeywords(query), filters);
+    } catch (err) {
+      logger.warn("Keyword search failed in Ollama mode", {
+        errorType: String(err).slice(0, 200),
+      });
+      return { chunks: [], evidenceLevel: "INSUFFICIENT" };
+    }
+  } else {
+    let queryEmbedding: number[];
+    try {
+      queryEmbedding = await embedQuery(query);
+    } catch {
+      return { chunks: [], evidenceLevel: "INSUFFICIENT" };
+    }
+
+    try {
+      chunks = await vectorSearchSQL(queryEmbedding, filters);
+    } catch (err) {
+      // Log the real reason the primary SQL path failed — silently
+      // swallowing this made past failures impossible to diagnose.
+      logger.warn("Vector SQL search failed, using in-memory fallback", {
+        errorType: String(err).slice(0, 200),
+      });
+      chunks = await vectorSearchInMemory(queryEmbedding, filters);
+    }
   }
 
   // Recover a section number from the chunk text when the ingestion
@@ -100,6 +115,80 @@ export async function retrieveRelevantChunks(
 
   const evidenceLevel = computeEvidenceLevel(chunks);
   return { chunks, evidenceLevel };
+}
+
+/**
+ * Ollama mode, non-English question: ask the local model for a handful of
+ * English search keywords (the corpus is English). Falls back to the raw
+ * query if the model fails.
+ */
+async function englishKeywords(query: string): Promise<string> {
+  if (/^[\x00-\x7F]*$/.test(query)) return query;
+  try {
+    const out = await generateCompletion(
+      [
+        {
+          role: "system",
+          content:
+            "Extract 4 to 8 English legal search keywords from the user's question. Reply with the keywords only, separated by spaces.",
+        },
+        { role: "user", content: query },
+      ],
+      { temperature: 0, maxTokens: 40 }
+    );
+    return out.trim() || query;
+  } catch {
+    return query;
+  }
+}
+
+/** Keyword (full-text) search used instead of vectors in Ollama mode. */
+async function keywordSearchSQL(
+  keywords: string,
+  filters: RAGSearchFilters
+): Promise<RetrievedChunk[]> {
+  // Only plain words reach the tsquery, so no operator can be injected.
+  const words = Array.from(
+    new Set((keywords.toLowerCase().match(/[a-z0-9]{3,}/g) ?? []).slice(0, 12))
+  );
+  if (words.length === 0) return [];
+
+  const rows = await (
+    prisma.$queryRawUnsafe as (query: string, ...values: unknown[]) => Promise<any[]>
+  )(
+    `
+    SELECT
+      c.id as "chunkId",
+      c."sourceId" as "sourceId",
+      s.title as "sourceTitle",
+      s."actName" as "actName",
+      c.section as "section",
+      s.jurisdiction as "jurisdiction",
+      s."officialUrl" as "officialUrl",
+      s."verificationStatus" as "verificationStatus",
+      c.text as "text",
+      ts_rank(to_tsvector('english', c.text), to_tsquery('english', $1)) as "rank"
+    FROM "LegalSourceChunk" c
+    JOIN "LegalSource" s ON s.id = c."sourceId"
+    WHERE s."verificationStatus" = 'VERIFIED'
+      AND to_tsvector('english', c.text) @@ to_tsquery('english', $1)
+      AND ($3::text IS NULL OR s.jurisdiction = $3::text)
+      AND ($4::text IS NULL OR s.language = $4::text)
+    ORDER BY "rank" DESC
+    LIMIT $2
+    `,
+    words.join(" | "),
+    resolveTopK(filters),
+    filters.jurisdiction ?? null,
+    filters.language ?? null
+  );
+
+  return rows.map((r: any) => {
+    const { rank, ...rest } = r;
+    // Map ts_rank (small numbers) onto the similarity scale the evidence
+    // level expects.
+    return { ...rest, similarity: Math.min(0.9, 0.25 + Number(rank) * 2) };
+  });
 }
 
 async function vectorSearchSQL(

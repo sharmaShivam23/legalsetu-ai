@@ -82,7 +82,7 @@ const MAX_DIM = 2600;
 
 // ─── Tesseract loader (CDN, singleton) ─────────────────────────────────────
 
-const TESSERACT_CDN = {
+export const TESSERACT_CDN = {
   workerPath: "https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/worker.min.js",
   corePath: "https://cdn.jsdelivr.net/npm/tesseract.js-core@5.0.0",
   langPath: "https://tessdata.projectnaptha.com/4.0.0",
@@ -97,7 +97,7 @@ declare global {
 
 let tesseractLoadPromise: Promise<any> | null = null;
 
-function loadTesseract(): Promise<any> {
+export function loadTesseract(): Promise<any> {
   if (typeof window !== "undefined" && window.Tesseract) {
     return Promise.resolve(window.Tesseract);
   }
@@ -172,7 +172,7 @@ function loadPdfJs(): Promise<any> {
   return pdfjsLoadPromise;
 }
 
-async function pdfToPageBlobs(
+export async function pdfToPageBlobs(
   file: File,
   maxPages: number
 ): Promise<{ blobs: Blob[]; totalPages: number }> {

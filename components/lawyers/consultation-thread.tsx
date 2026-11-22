@@ -1,5 +1,7 @@
 "use client";
 
+import { readApi } from "./api";
+
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, FileText, FolderOpen, Loader2, Lock, Send, Share2, Undo2 } from "lucide-react";
@@ -32,7 +34,7 @@ function SharedCaseView({ consultationId, caseId }: { consultationId: string; ca
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     fetch(`/api/consultations/${consultationId}/cases/${caseId}`)
-      .then((r) => r.json())
+      .then(readApi)
       .then((j) => (j.success ? setData(j.data) : setError(j.error?.message ?? "Could not open the case.")))
       .catch(() => setError("Could not reach the server."));
   }, [consultationId, caseId]);
@@ -87,6 +89,7 @@ function SharedCaseView({ consultationId, caseId }: { consultationId: string; ca
 export function ConsultationThread({ id }: { id: string }) {
   const [c, setC] = useState<SerializedConsultation | null>(null);
   const [notFound, setNotFound] = useState(false);
+  const [loadFailed, setLoadFailed] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [canSend, setCanSend] = useState(false);
   const [draft, setDraft] = useState("");
@@ -103,19 +106,33 @@ export function ConsultationThread({ id }: { id: string }) {
   const lastSeen = useRef<string | null>(null);
 
   const loadConsultation = useCallback(async () => {
-    const r = await fetch(`/api/consultations/${id}`);
-    if (r.status === 404) return setNotFound(true);
-    const j = await r.json();
-    if (j.success) setC(j.data.consultation);
+    try {
+      const r = await fetch(`/api/consultations/${id}`);
+      if (r.status === 404) return setNotFound(true);
+      const j = await readApi(r);
+      if (j.success) {
+        setC(j.data.consultation);
+        setLoadFailed(null);
+      } else {
+        setLoadFailed(j.error?.message ?? "Could not load this consultation.");
+      }
+    } catch {
+      setLoadFailed("Could not reach the server. Check your connection.");
+    }
   }, [id]);
 
   const loadMessages = useCallback(async () => {
     // Overlap the window by 2 s and de-duplicate, so a message written in
     // the same millisecond as the last one seen is never missed.
     const after = lastSeen.current ? new Date(new Date(lastSeen.current).getTime() - 2000).toISOString() : null;
-    const r = await fetch(`/api/consultations/${id}/messages${after ? `?after=${encodeURIComponent(after)}` : ""}`);
+    let r: Response;
+    try {
+      r = await fetch(`/api/consultations/${id}/messages${after ? `?after=${encodeURIComponent(after)}` : ""}`);
+    } catch {
+      return; // offline or the server is restarting: the next poll tries again
+    }
     if (!r.ok) return;
-    const j = await r.json();
+    const j = await readApi(r);
     if (!j.success) return;
     setCanSend(j.data.canSend);
     const incoming: Message[] = j.data.messages;
@@ -153,7 +170,7 @@ export function ConsultationThread({ id }: { id: string }) {
   useEffect(() => {
     if (c?.party !== "CITIZEN") return;
     fetch("/api/cases")
-      .then((r) => r.json())
+      .then(readApi)
       .then((j) => j.success && setCases(j.data.cases.map((x: { id: string; title: string }) => ({ id: x.id, title: x.title }))))
       .catch(() => undefined);
   }, [c?.party]);
@@ -167,7 +184,7 @@ export function ConsultationThread({ id }: { id: string }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action, reason: reason || null }),
       });
-      const j = await r.json();
+      const j = await readApi(r);
       if (!j.success) return setError(j.error?.message ?? "Could not update the request.");
       setC(j.data.consultation);
       setDeclining(false);
@@ -189,7 +206,7 @@ export function ConsultationThread({ id }: { id: string }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ body }),
       });
-      const j = await r.json();
+      const j = await readApi(r);
       if (!j.success) return setError(j.error?.message ?? "Could not send the message.");
       setDraft("");
       const m: Message = j.data.message;
@@ -210,7 +227,7 @@ export function ConsultationThread({ id }: { id: string }) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ caseId: shareCaseId }),
     });
-    const j = await r.json();
+    const j = await readApi(r);
     setBusy(false);
     if (!j.success) return setError(j.error?.message ?? "Could not share the case.");
     setShareCaseId("");
@@ -234,6 +251,20 @@ export function ConsultationThread({ id }: { id: string }) {
         <Link href="/dashboard/consultations" className="mt-3 inline-block text-sm font-semibold text-brandBlue">
           Back to consultations
         </Link>
+      </div>
+    );
+  }
+  if (!c && loadFailed) {
+    return (
+      <div className="flex items-center justify-between gap-3 rounded-2xl border border-rose-500/40 bg-rose-500/5 p-4 text-sm text-rose-700 dark:text-rose-400">
+        <p>{loadFailed}</p>
+        <button
+          type="button"
+          onClick={() => void loadConsultation()}
+          className="shrink-0 rounded-lg border border-rose-500/40 px-3 py-1 text-xs font-semibold hover:bg-rose-500/10"
+        >
+          Try again
+        </button>
       </div>
     );
   }

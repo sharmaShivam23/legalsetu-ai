@@ -93,6 +93,63 @@ export function LawyerFinder() {
   const [error, setError] = useState<string | null>(null);
   const [hovered, setHovered] = useState<string | null>(null);
   const [page, setPage] = useState(1);
+  // Default: every advocate, A to Z. "Find lawyers near you" turns this on.
+  const [nearMode, setNearMode] = useState(false);
+  const [locating, setLocating] = useState(false);
+  const [geoNote, setGeoNote] = useState<string | null>(null);
+  const [pendingNear, setPendingNear] = useState(false);
+
+  /** Saved address -> near mode at once; otherwise ask the browser for GPS, falling back to the address form. */
+  const findNearMe = useCallback(() => {
+    setGeoNote(null);
+    if (location) {
+      setNearMode(true);
+      setPage(1);
+      return;
+    }
+    const openForm = (note: string) => {
+      setGeoNote(note);
+      setPendingNear(true);
+      setChanging(true);
+    };
+    if (!("geolocation" in navigator)) return openForm("Your browser cannot share location. Enter your PIN code or city instead.");
+    setLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        try {
+          const res = await fetch("/api/location", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ source: "GPS", latitude: pos.coords.latitude, longitude: pos.coords.longitude }),
+          });
+          const json = await res.json().catch(() => null);
+          if (!json?.success) throw new Error();
+          setLocation(json.data.location);
+          setNearMode(true);
+          setPage(1);
+        } catch {
+          openForm("Could not save your location. Enter your PIN code or city instead.");
+        } finally {
+          setLocating(false);
+        }
+      },
+      (err) => {
+        setLocating(false);
+        openForm(
+          err.code === err.PERMISSION_DENIED
+            ? "Location permission was denied. Enter your PIN code or city instead."
+            : "Could not get your location. Enter your PIN code or city instead."
+        );
+      },
+      { enableHighAccuracy: false, timeout: 15_000, maximumAge: 10 * 60_000 }
+    );
+  }, [location]);
+
+  const showAll = () => {
+    setNearMode(false);
+    setFilters((f) => ({ ...f, radiusKm: null }));
+    setPage(1);
+  };
 
   useEffect(() => {
     fetch("/api/location")
@@ -104,11 +161,13 @@ export function LawyerFinder() {
   const query = useMemo(() => {
     if (location === undefined) return null; // still loading the saved address
     const q = new URLSearchParams({ page: String(page) });
-    if (location) {
+    if (nearMode && location) {
       q.set("lat", String(location.latitude));
       q.set("lng", String(location.longitude));
+    } else {
+      q.set("all", "1"); // everyone, A to Z — do not fall back to the saved address
     }
-    if (filters.radiusKm && location) q.set("radiusKm", String(filters.radiusKm));
+    if (filters.radiusKm && nearMode && location) q.set("radiusKm", String(filters.radiusKm));
     if (filters.area) q.set("area", filters.area);
     if (filters.language) q.set("language", filters.language);
     if (filters.court) q.set("court", filters.court);
@@ -116,14 +175,34 @@ export function LawyerFinder() {
     if (filters.legalAid) q.set("legalAid", "1");
     if (filters.available) q.set("available", "1");
     return q.toString();
-  }, [location, filters, page]);
+  }, [location, nearMode, filters, page]);
 
   const load = useCallback(async (q: string, append: boolean) => {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/lawyers?${q}`);
-      const json = await res.json();
+      // The server (or its database) can hiccup on the very first request
+      // after being idle, so a failed attempt is retried once, quietly.
+      let json: any = null;
+      let networkDown = false;
+      for (let attempt = 0; attempt < 2 && !json; attempt++) {
+        if (attempt > 0) await new Promise((r) => setTimeout(r, 1500));
+        try {
+          const res = await fetch(`/api/lawyers?${q}`);
+          json = await res.json().catch(() => null); // a crashed route returns HTML, not JSON
+          networkDown = false;
+        } catch {
+          networkDown = true;
+        }
+      }
+      if (!json) {
+        setError(
+          networkDown
+            ? "Could not reach the server. Check your connection."
+            : "The server had a problem loading advocates. Please try again."
+        );
+        return;
+      }
       if (!json.success) {
         setError(json.error?.message ?? "Could not load lawyers.");
         return;
@@ -132,8 +211,6 @@ export function LawyerFinder() {
         total: json.data.total,
         lawyers: append && prev ? [...prev.lawyers, ...json.data.lawyers] : json.data.lawyers,
       }));
-    } catch {
-      setError("Could not reach the server. Check your connection.");
     } finally {
       setLoading(false);
     }
@@ -175,41 +252,60 @@ export function LawyerFinder() {
       <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-borderCustom bg-card p-3">
         <MapPin className="h-4 w-4 shrink-0 text-brandBlue" aria-hidden />
         <p className="min-w-0 flex-1 truncate text-sm text-textPrimary">
-          {location ? (
+          {nearMode && location ? (
             <>
               Nearest to <span className="font-semibold">{location.label}</span>
             </>
           ) : (
-            <span className="text-textSecondary">Add your address to see the nearest lawyers first</span>
+            <span className="text-textSecondary">Showing all verified advocates · A to Z</span>
           )}
         </p>
-        <button
-          type="button"
-          onClick={() => setChanging((c) => !c)}
-          aria-expanded={changing}
-          className="rounded-lg px-2 py-1 text-xs font-semibold text-brandBlue hover:bg-brandBlue/5"
-        >
-          {location ? "Change location" : "Add address"}
-        </button>
-        <div className="flex gap-1" role="radiogroup" aria-label="Distance">
-          {([null, ...RADIUS_OPTIONS_KM] as (number | null)[]).map((r) => (
+        {nearMode && location ? (
+          <>
             <button
-              key={r ?? "all"}
               type="button"
-              role="radio"
-              aria-checked={filters.radiusKm === r}
-              disabled={r !== null && !location}
-              title={r !== null && !location ? "Add your address to filter by distance" : undefined}
-              onClick={() => setFilter("radiusKm", r)}
-              className={cn(
-                "rounded-full border px-2.5 py-1 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-40",
-                filters.radiusKm === r ? "border-brandBlue bg-brandBlue text-white" : "border-borderCustom text-textSecondary hover:text-textPrimary"
-              )}
+              onClick={() => setChanging((c) => !c)}
+              aria-expanded={changing}
+              className="rounded-lg px-2 py-1 text-xs font-semibold text-brandBlue hover:bg-brandBlue/5"
             >
-              {r === null ? "All" : `${r} km`}
+              Change location
             </button>
-          ))}
-        </div>
+            <div className="flex gap-1" role="radiogroup" aria-label="Distance">
+              {([null, ...RADIUS_OPTIONS_KM] as (number | null)[]).map((r) => (
+                <button
+                  key={r ?? "all"}
+                  type="button"
+                  role="radio"
+                  aria-checked={filters.radiusKm === r}
+                  onClick={() => setFilter("radiusKm", r)}
+                  className={cn(
+                    "rounded-full border px-2.5 py-1 text-xs font-semibold",
+                    filters.radiusKm === r ? "border-brandBlue bg-brandBlue text-white" : "border-borderCustom text-textSecondary hover:text-textPrimary"
+                  )}
+                >
+                  {r === null ? "Any distance" : `${r} km`}
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={showAll}
+              className="rounded-xl border border-borderCustom px-3 py-1.5 text-xs font-semibold text-textPrimary hover:bg-canvas"
+            >
+              Show all lawyers
+            </button>
+          </>
+        ) : (
+          <button
+            type="button"
+            onClick={findNearMe}
+            disabled={locating}
+            className="flex items-center gap-1.5 rounded-xl bg-brandBlue px-3.5 py-1.5 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-60"
+          >
+            {locating ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : <MapPin className="h-3.5 w-3.5" aria-hidden />}
+            Find lawyers near you
+          </button>
+        )}
         <button
           type="button"
           onClick={() => setShowFilters((s) => !s)}
@@ -244,11 +340,17 @@ export function LawyerFinder() {
       {changing && (
         <section className="rounded-2xl border border-brandBlue/30 bg-card p-5" aria-label="Set your location">
           <p className="mb-3 text-sm text-textSecondary">Lawyers are sorted by distance from this place. It is saved to about 1 km and never shown to lawyers.</p>
+          {geoNote && <p className="mb-3 text-sm font-medium text-amber-700 dark:text-amber-400">{geoNote}</p>}
           <div className="max-w-md">
             <LocationPicker
               onSaved={(l) => {
                 setLocation(l);
                 setChanging(false);
+                setGeoNote(null);
+                if (pendingNear) {
+                  setNearMode(true);
+                  setPendingNear(false);
+                }
                 setPage(1);
               }}
             />
@@ -327,17 +429,31 @@ export function LawyerFinder() {
 
       <p className="flex items-start gap-1.5 text-[11px] leading-relaxed text-textSecondary">
         <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
-        Sorted by distance only. As Bar Council rules require, LegalSetu does not rank, rate or advertise advocates. Every listed
+        Listed A to Z, or by distance only when you choose &quot;near you&quot;. As Bar Council rules require, LegalSetu does not rank, rate or advertise advocates. Every listed
         advocate&apos;s enrolment has been checked by our team.
       </p>
 
-      {error && <p className="rounded-xl border border-rose-500/40 bg-rose-500/5 px-3 py-2 text-sm text-rose-700 dark:text-rose-400">{error}</p>}
+      {error && (
+        <div className="flex items-center justify-between gap-3 rounded-xl border border-rose-500/40 bg-rose-500/5 px-3 py-2 text-sm text-rose-700 dark:text-rose-400">
+          <p>{error}</p>
+          {query && (
+            <button
+              type="button"
+              onClick={() => void load(query, page > 1)}
+              disabled={loading}
+              className="shrink-0 rounded-lg border border-rose-500/40 px-3 py-1 text-xs font-semibold hover:bg-rose-500/10 disabled:opacity-50"
+            >
+              Try again
+            </button>
+          )}
+        </div>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <section aria-label="Advocates" aria-live="polite" className={cn("space-y-3", view === "map" && "hidden lg:block")}>
           <p className="text-xs font-semibold text-textSecondary">
             {results
-              ? `${results.total} verified advocate${results.total === 1 ? "" : "s"}${filters.radiusKm ? ` within ${filters.radiusKm} km` : ""}${location ? " · nearest first" : " · A to Z"}`
+              ? `${results.total} verified advocate${results.total === 1 ? "" : "s"}${filters.radiusKm ? ` within ${filters.radiusKm} km` : ""}${nearMode && location ? " · nearest first" : " · A to Z"}`
               : "Searching…"}
           </p>
           {results?.lawyers.map((l, i) => (
@@ -381,10 +497,10 @@ export function LawyerFinder() {
 
         <section aria-label="Map" className={cn("lg:sticky lg:top-6 lg:self-start", view === "list" && "hidden lg:block")}>
           <LawyerMap
-            center={location ? [location.latitude, location.longitude] : INDIA_CENTRE}
+            center={nearMode && location ? [location.latitude, location.longitude] : INDIA_CENTRE}
             radiusKm={filters.radiusKm ?? undefined}
             fitToPins={filters.radiusKm === null}
-            showCenter={Boolean(location)}
+            showCenter={Boolean(nearMode && location)}
             pins={pins}
             height={520}
           />

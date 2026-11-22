@@ -1,5 +1,7 @@
 "use client";
 
+import { readApi } from "./api";
+
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { AlarmClock, CalendarClock, ChevronRight, Inbox, MessagesSquare, ShieldAlert, UserCheck } from "lucide-react";
@@ -46,9 +48,9 @@ export function ClientDesk() {
   useEffect(() => {
     (async () => {
       const [p, c, d] = await Promise.all([
-        fetch("/api/lawyer/profile").then((r) => r.json()),
-        fetch("/api/consultations").then((r) => r.json()),
-        fetch("/api/advocate/deadlines").then((r) => r.json()),
+        fetch("/api/lawyer/profile").then(readApi),
+        fetch("/api/consultations").then(readApi),
+        fetch("/api/advocate/deadlines").then(readApi),
       ]);
       setDesk({
         profile: p.success ? p.data.profile : null,

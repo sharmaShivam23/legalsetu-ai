@@ -4,6 +4,7 @@
 
 import type { NextRequest } from "next/server";
 import { apiError } from "@/lib/utils/api-response";
+import { logger } from "@/lib/logging/logger";
 import { checkRateLimit, RATE_LIMITS } from "@/lib/security/rate-limit";
 import { getSessionUser, type SessionUser } from "./server";
 
@@ -76,4 +77,23 @@ export function privateFileHeaders(contentType: string, filename: string): Heade
     headers["Content-Security-Policy"] = "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox";
   }
   return headers;
+}
+
+/**
+ * Wraps a route handler so an unexpected exception (for example the database
+ * being unreachable) answers with the usual JSON error instead of an empty
+ * 500 that the browser cannot parse.
+ */
+export function safeRoute<A extends unknown[]>(
+  name: string,
+  handler: (...args: A) => Promise<Response>
+): (...args: A) => Promise<Response> {
+  return async (...args: A) => {
+    try {
+      return await handler(...args);
+    } catch (err) {
+      logger.error("Route failed", { route: name, errorType: String(err).slice(0, 200) });
+      return apiError("SERVER_ERROR", "The server had a problem. Please try again in a moment.", 500);
+    }
+  };
 }

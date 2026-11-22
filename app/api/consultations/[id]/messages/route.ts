@@ -13,7 +13,7 @@ import { apiError, apiSuccess } from "@/lib/utils/api-response";
 import { messageSchema } from "@/lib/lawyers/validation";
 import { canMessage } from "@/lib/lawyers/consultation-rules";
 import { loadForParty } from "@/lib/lawyers/consultations";
-import { firstIssue, readJson, requireUser } from "@/lib/lawyers/http";
+import { firstIssue, readJson, requireUser, safeRoute } from "@/lib/lawyers/http";
 
 type Params = { params: Promise<{ id: string }> };
 const PAGE = 200;
@@ -26,7 +26,7 @@ const view = (m: { id: string; senderId: string; body: string; createdAt: Date; 
   read: m.readAt !== null,
 });
 
-export async function GET(req: NextRequest, { params }: Params) {
+async function getHandler(req: NextRequest, { params }: Params) {
   const g = await requireUser();
   if (g.error) return g.error;
   const { id } = await params;
@@ -53,7 +53,7 @@ export async function GET(req: NextRequest, { params }: Params) {
   });
 }
 
-export async function POST(req: NextRequest, { params }: Params) {
+async function postHandler(req: NextRequest, { params }: Params) {
   const g = await requireUser("consultationMessage");
   if (g.error) return g.error;
   const { id } = await params;
@@ -79,3 +79,7 @@ export async function POST(req: NextRequest, { params }: Params) {
   ]);
   return apiSuccess({ message: view(message, g.user.id) }, 201);
 }
+
+export const GET = safeRoute("consultation messages GET", getHandler);
+
+export const POST = safeRoute("consultation messages POST", postHandler);

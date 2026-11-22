@@ -19,6 +19,7 @@
 //   OLLAMA_CHAT_MODEL=gemma3:1b              (any model you have pulled)
 // ==========================================================
 
+import { getSelectedOllamaModel } from "./mode";
 import type {
   AIProvider,
   EmbeddingResult,
@@ -38,8 +39,42 @@ export function ollamaBaseUrl(): string | null {
   return url ? url.replace(/\/$/, "") : null;
 }
 
+/** Keep the model in memory between requests so a demo never pays a cold start. */
+const KEEP_ALIVE = process.env.OLLAMA_KEEP_ALIVE?.trim() || "30m";
+
 export function ollamaModel(): string {
-  return process.env.OLLAMA_CHAT_MODEL?.trim() || "gemma3:1b";
+  // The model picked in the Ollama-mode toggle wins over the .env default.
+  return getSelectedOllamaModel() || process.env.OLLAMA_CHAT_MODEL?.trim() || "gemma3:1b";
+}
+
+/** Models pulled on this machine, or null when the server is unreachable. */
+export async function listOllamaModels(): Promise<string[] | null> {
+  const base = ollamaBaseUrl();
+  if (!base) return null;
+  try {
+    const res = await fetch(`${base}/api/tags`, { signal: AbortSignal.timeout(4000) });
+    if (!res.ok) return null;
+    const json = (await res.json()) as { models?: { name: string }[] };
+    return (json.models ?? []).map((m) => m.name);
+  } catch {
+    return null;
+  }
+}
+
+/** Loads the model into memory (empty prompt) so the first answer is fast. */
+export async function warmUpOllama(model: string = ollamaModel()): Promise<void> {
+  const base = ollamaBaseUrl();
+  if (!base) return;
+  try {
+    await fetch(`${base}/api/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model, prompt: "", keep_alive: KEEP_ALIVE, stream: false }),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+  } catch {
+    // Best effort — the first real request will load it instead.
+  }
 }
 
 export class OllamaProvider implements AIProvider {
@@ -51,6 +86,7 @@ export class OllamaProvider implements AIProvider {
       model: ollamaModel(),
       messages: options.messages,
       stream,
+      keep_alive: KEEP_ALIVE,
       options: {
         num_ctx: NUM_CTX,
         num_predict: options.maxTokens ?? 1000,
