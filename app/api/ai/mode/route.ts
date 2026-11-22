@@ -11,6 +11,7 @@ import { auth } from "@/lib/auth/auth";
 import { apiError, apiSuccess } from "@/lib/utils/api-response";
 import { isOllamaMode, setOllamaMode } from "@/lib/ai/mode";
 import { listOllamaModels, ollamaBaseUrl, ollamaModel, warmUpOllama } from "@/lib/ai/ollama";
+import { ensureLocalVoice } from "@/lib/voice/local-voice";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -82,5 +83,8 @@ export async function POST(req: NextRequest) {
   setOllamaMode(true, chosen);
   // Load the model into memory in the background so the first answer is quick.
   void warmUpOllama(chosen);
+  // Voice mode in Ollama mode transcribes with local Whisper: start it now
+  // (it takes several seconds to load) rather than on the first question.
+  void ensureLocalVoice();
   return apiSuccess(await snapshot());
 }

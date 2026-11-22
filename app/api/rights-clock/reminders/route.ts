@@ -14,6 +14,7 @@
 // ==========================================================
 
 import { NextRequest } from "next/server";
+import { emailBaseUrl } from "@/lib/email/links";
 import { timingSafeEqual } from "crypto";
 import { prisma } from "@/lib/db/prisma";
 import { apiError, apiSuccess } from "@/lib/utils/api-response";
@@ -52,7 +53,7 @@ async function run(req: NextRequest) {
   if (!ok) return apiError("UNAUTHORIZED", "Invalid reminder job credentials.", 401);
 
   const today = todayInIndia();
-  const appUrl = (process.env.NEXT_PUBLIC_APP_URL ?? process.env.AUTH_URL ?? "http://localhost:3000").replace(/\/$/, "");
+  const appUrl = emailBaseUrl();
   let scanned = 0;
   let emailed = 0;
   let failed = 0;

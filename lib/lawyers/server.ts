@@ -3,6 +3,7 @@
 // ==========================================================
 
 import { after } from "next/server";
+import { emailLink } from "@/lib/email/links";
 import type { LawyerDocument, LawyerProfile, Prisma, Role } from "@prisma/client";
 import { auth } from "@/lib/auth/auth";
 import { prisma } from "@/lib/db/prisma";
@@ -198,8 +199,7 @@ export async function audit(userId: string | null, action: string, metadata: Rec
 }
 
 export function appUrl(path: string): string {
-  const base = (process.env.NEXT_PUBLIC_APP_URL ?? process.env.AUTH_URL ?? "http://localhost:3000").replace(/\/$/, "");
-  return `${base}${path}`;
+  return emailLink(path);
 }
 
 type NotifyMail = { name?: string | null; subject: string; heading: string; body: string; ctaLabel: string; ctaPath: string };

@@ -76,3 +76,8 @@ warm-*.log
 
 # generated call audio (lib/calls/speech.ts, scripts/call-simulator.ts)
 .cache/
+
+# local voice server (Ollama mode)
+voice-local/server.log
+voice-local/voices/
+.ollama-mode.json

@@ -248,6 +248,10 @@ export function ConsultationThread({ id }: { id: string }) {
     return (
       <div className="rounded-2xl border border-borderCustom bg-card p-10 text-center">
         <p className="text-sm font-semibold text-textPrimary">Consultation not found</p>
+        <p className="mx-auto mt-2 max-w-md text-xs leading-relaxed text-textSecondary">
+          A consultation can only be opened by the two people in it: the person who sent the request and the advocate it was sent to.
+          If you followed a link from an email, make sure you are signed in with the account that email was sent for.
+        </p>
         <Link href="/dashboard/consultations" className="mt-3 inline-block text-sm font-semibold text-brandBlue">
           Back to consultations
         </Link>

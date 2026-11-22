@@ -14,6 +14,7 @@ import { consultationCreateSchema } from "@/lib/lawyers/validation";
 import { audit, isListable, notifyLater } from "@/lib/lawyers/server";
 import { consultationInclude, messageStats, serializeConsultation } from "@/lib/lawyers/consultations";
 import { firstIssue, readJson, requireUser } from "@/lib/lawyers/http";
+import { advocateMailTargets, isDemoOperator } from "@/lib/lawyers/demo-operator";
 
 export async function GET() {
   const g = await requireUser();
@@ -28,7 +29,10 @@ export async function GET() {
       take: 100,
     }),
     prisma.consultationRequest.findMany({
-      where: { lawyer: { userId: user.id } },
+      // Demo operators also see the requests sent to the (fictional) demo advocates.
+      where: isDemoOperator(user)
+        ? { OR: [{ lawyer: { userId: user.id } }, { lawyer: { isDemo: true } }] }
+        : { lawyer: { userId: user.id } },
       include: consultationInclude,
       orderBy: { updatedAt: "desc" },
       take: 200,
@@ -99,16 +103,21 @@ export async function POST(req: NextRequest) {
 
   await audit(user.id, "CONSULTATION_REQUESTED", { requestId: created.id, lawyerProfileId: lawyer.id, sharedCase: Boolean(d.caseId) });
   logger.info("Consultation requested", { userId: user.id, requestId: created.id });
-  notifyLater(lawyer.user.email, {
-    name: lawyer.user.name,
-    subject: d.urgency === "URGENT" ? "Urgent consultation request on LegalSetu" : "New consultation request on LegalSetu",
-    heading: d.urgency === "URGENT" ? "An urgent consultation request is waiting" : "You have a new consultation request",
-    body: `A LegalSetu user has asked for help with a ${label.practiceArea(d.category).toLowerCase()} matter${
-      d.caseId ? " and shared their case file with you" : ""
-    }. Open your requests to read it and accept or decline.`,
-    ctaLabel: "Open my requests",
-    ctaPath: `/dashboard/consultations/${created.id}`,
-  });
+  // A demo advocate is fictional, so its mail goes to the demo operators.
+  for (const to of advocateMailTargets(lawyer, lawyer.user.email)) {
+    notifyLater(to, {
+      name: lawyer.user.name,
+      subject: d.urgency === "URGENT" ? "Urgent consultation request on LegalSetu" : "New consultation request on LegalSetu",
+      heading: d.urgency === "URGENT" ? "An urgent consultation request is waiting" : "You have a new consultation request",
+      body: `A LegalSetu user has asked for help with a ${label.practiceArea(d.category).toLowerCase()} matter${
+        d.caseId ? " and shared their case file with you" : ""
+      }. Open your requests to read it and accept or decline.${
+        lawyer.isDemo ? ` (This request was sent to the demo advocate ${lawyer.fullName}; you are receiving it as a demo operator.)` : ""
+      }`,
+      ctaLabel: "Open my requests",
+      ctaPath: `/dashboard/consultations/${created.id}`,
+    });
+  }
 
   return apiSuccess({ consultation: serializeConsultation(created, "CITIZEN") }, 201);
 }

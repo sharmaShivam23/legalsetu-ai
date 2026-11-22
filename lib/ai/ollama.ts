@@ -20,6 +20,7 @@
 // ==========================================================
 
 import { getSelectedOllamaModel } from "./mode";
+import { logger } from "@/lib/logging/logger";
 import type {
   AIProvider,
   EmbeddingResult,
@@ -69,7 +70,10 @@ export async function warmUpOllama(model: string = ollamaModel()): Promise<void>
     await fetch(`${base}/api/generate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model, prompt: "", keep_alive: KEEP_ALIVE, stream: false }),
+      // Same num_ctx as real requests: Ollama reloads the whole model when
+      // the context size changes, so a warm-up with the default size was
+      // undone by the first real question.
+      body: JSON.stringify({ model, prompt: "", keep_alive: KEEP_ALIVE, stream: false, options: { num_ctx: NUM_CTX } }),
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
   } catch {
@@ -142,8 +146,29 @@ export class OllamaProvider implements AIProvider {
       buffer = lines.pop() ?? "";
       for (const line of lines) {
         if (!line.trim()) continue;
-        const chunk = JSON.parse(line) as { message?: { content?: string }; done?: boolean; error?: string };
+        const chunk = JSON.parse(line) as {
+          message?: { content?: string };
+          done?: boolean;
+          error?: string;
+          load_duration?: number;
+          prompt_eval_count?: number;
+          prompt_eval_duration?: number;
+          eval_count?: number;
+          eval_duration?: number;
+        };
         if (chunk.error) throw new Error(`Ollama: ${chunk.error}`);
+        if (chunk.done) {
+          // Where the time went: on a CPU, prompt reading usually dominates.
+          const s = (ns?: number) => Math.round((ns ?? 0) / 1e6) / 1000;
+          logger.info("Ollama generation", {
+            model: ollamaModel(),
+            loadS: s(chunk.load_duration),
+            promptTokens: chunk.prompt_eval_count,
+            promptS: s(chunk.prompt_eval_duration),
+            outputTokens: chunk.eval_count,
+            outputS: s(chunk.eval_duration),
+          });
+        }
         const delta = chunk.message?.content ?? "";
         if (delta) yield { delta, done: false };
       }

@@ -193,3 +193,52 @@ export function extractClauses(
 
   return { sentences: clauses, rest };
 }
+
+// ----------------------------------------------------------
+// Which voice should read this text?
+// ----------------------------------------------------------
+// The reply language is decided before the answer exists, but the model
+// does not always obey it: with Hindi earlier in a conversation, an
+// English request was answered in Hindi — and an English voice then read
+// Devanagari aloud as gibberish. The text's own script is the ground truth
+// for which voice can pronounce it.
+
+/** Unicode block -> the app language whose voice reads that script. */
+const SCRIPTS: { re: RegExp; lang: string; family: string[] }[] = [
+  { re: /[ऀ-ॿ]/g, lang: "hi", family: ["hi", "mr", "mai", "bho", "sat"] },
+  { re: /[ঀ-৿]/g, lang: "bn", family: ["bn", "as"] },
+  { re: /[਀-੿]/g, lang: "pa", family: ["pa"] },
+  { re: /[઀-૿]/g, lang: "gu", family: ["gu"] },
+  { re: /[଀-୿]/g, lang: "or", family: ["or"] },
+  { re: /[஀-௿]/g, lang: "ta", family: ["ta"] },
+  { re: /[ఀ-౿]/g, lang: "te", family: ["te"] },
+  { re: /[ಀ-೿]/g, lang: "kn", family: ["kn"] },
+  { re: /[ഀ-ൿ]/g, lang: "ml", family: ["ml"] },
+  { re: /[؀-ۿ]/g, lang: "ur", family: ["ur"] },
+];
+
+/**
+ * The language to SPEAK `text` in. Keeps `fallback` whenever its voice can
+ * read the text; switches only when another script clearly dominates.
+ * Latin text inside an Indian-language reply ("BNS", "FIR") stays with the
+ * reply's voice — those voices read English words — so a single answer is
+ * never split across two voices for an acronym. Pure English text with an
+ * Indian-language fallback is switched to English only when it contains no
+ * Indian script at all and is a real sentence, not a stray term.
+ */
+export function speechLanguageFor(text: string, fallback: string): string {
+  const base = (fallback || "en").split("-")[0].toLowerCase();
+  let best: { lang: string; family: string[]; count: number } | null = null;
+  for (const s of SCRIPTS) {
+    const count = text.match(s.re)?.length ?? 0;
+    if (count > (best?.count ?? 0)) best = { lang: s.lang, family: s.family, count };
+  }
+  const latin = text.match(/[A-Za-z]/g)?.length ?? 0;
+
+  if (best && best.count >= latin) {
+    return best.family.includes(base) ? base : best.lang;
+  }
+  // Mostly Latin script.
+  if (base !== "en" && !best && latin >= 20) return "en";
+  return base;
+}

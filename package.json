@@ -27,6 +27,7 @@
     "rights-clock:build": "tsx scripts/build-bns-punishments.ts",
     "lawyers:seed": "tsx --env-file=.env scripts/seed-lawyers.ts",
     "voice:bridge": "tsx voice-bridge/server.ts",
+    "voice:local": "python voice-local/server.py",
     "call:simulate": "tsx scripts/call-simulator.ts"
   },
   "prisma": {

@@ -12,6 +12,7 @@ import { nextStatus } from "@/lib/lawyers/consultation-rules";
 import { audit, notifyLater } from "@/lib/lawyers/server";
 import { consultationInclude, loadForParty, messageStats, serializeConsultation } from "@/lib/lawyers/consultations";
 import { firstIssue, readJson, requireUser, safeRoute } from "@/lib/lawyers/http";
+import { advocateMailTargets } from "@/lib/lawyers/demo-operator";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -66,19 +67,28 @@ async function patchHandler(req: NextRequest, { params }: Params) {
     party === "LAWYER"
       ? await prisma.user.findUnique({ where: { id: request.citizenId }, select: { email: true, name: true } })
       : await prisma.user.findUnique({ where: { id: request.lawyer.userId }, select: { email: true, name: true } });
-  notifyLater(other?.email, {
-    name: other?.name,
-    subject: `Your consultation request was ${PAST[action]}`,
-    heading: `Consultation ${PAST[action]}`,
-    body:
-      action === "accept"
-        ? `${request.lawyer.fullName} accepted your request. You can now message each other on LegalSetu.`
-        : action === "decline"
-          ? `${request.lawyer.fullName} could not take your request${reason ? `: "${reason}"` : "."} You can ask another advocate, or contact free legal aid on 15100.`
-          : `The consultation was ${PAST[action]} by the ${party === "LAWYER" ? "advocate" : "client"}. Shared case files are no longer visible to the advocate.`,
-    ctaLabel: "Open the consultation",
-    ctaPath: `/dashboard/consultations/${id}`,
-  });
+  // When the client acts, the advocate side is told — for a demo advocate
+  // that means the demo operators (the fictional address would bounce).
+  const recipients = !other?.email
+    ? []
+    : party === "CITIZEN"
+      ? advocateMailTargets(request.lawyer, other.email)
+      : [other.email];
+  for (const to of recipients) {
+    notifyLater(to, {
+      name: other?.name,
+      subject: `Your consultation request was ${PAST[action]}`,
+      heading: `Consultation ${PAST[action]}`,
+      body:
+        action === "accept"
+          ? `${request.lawyer.fullName} accepted your request. You can now message each other on LegalSetu.`
+          : action === "decline"
+            ? `${request.lawyer.fullName} could not take your request${reason ? `: "${reason}"` : "."} You can ask another advocate, or contact free legal aid on 15100.`
+            : `The consultation was ${PAST[action]} by the ${party === "LAWYER" ? "advocate" : "client"}. Shared case files are no longer visible to the advocate.`,
+      ctaLabel: "Open the consultation",
+      ctaPath: `/dashboard/consultations/${id}`,
+    });
+  }
 
   const s = (await messageStats([id], g.user.id)).get(id)!;
   return apiSuccess({ consultation: serializeConsultation(updated, party, s.unread, s.last) });

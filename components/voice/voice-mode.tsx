@@ -45,7 +45,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Mic, MicOff, X, Loader2, AudioLines, AlertTriangle, Volume2 } from "lucide-react";
 import type { ChatMode } from "@/lib/rag/prompt";
-import { extractClauses, toSpeakable } from "@/lib/voice/speech-text";
+import { extractClauses, speechLanguageFor, toSpeakable } from "@/lib/voice/speech-text";
 import { getLanguage, speechCodeFor, normalizeLanguage, DEFAULT_LANGUAGE } from "@/lib/i18n/languages";
 import { appLanguageFromSarvam } from "@/lib/i18n/sarvam-translate";
 
@@ -137,14 +137,63 @@ function pickMimeType(): string {
   return "";
 }
 
+/**
+ * The best installed browser voice for a language, or null.
+ * Neural/online voices ("Microsoft Swara Online (Natural)" in Edge,
+ * "Google हिन्दी" in Chrome) sound far better than the old desktop SAPI
+ * voices, so they win when present. Some engines report "hi_IN", not "hi-IN".
+ */
+function pickBrowserVoice(appLanguage: string): SpeechSynthesisVoice | null {
+  if (typeof window === "undefined" || !("speechSynthesis" in window)) return null;
+  const voices = window.speechSynthesis.getVoices();
+  const tag = speechCodeFor(appLanguage).toLowerCase();
+  const base = tag.split("-")[0];
+  let best: SpeechSynthesisVoice | null = null;
+  let bestScore = 0;
+  for (const v of voices) {
+    const lang = (v.lang || "").replace("_", "-").toLowerCase();
+    if (lang.split("-")[0] !== base) continue;
+    let score = 1;
+    if (lang === tag) score += 4;
+    if (/natural|neural/i.test(v.name)) score += 4;
+    else if (/online|google/i.test(v.name)) score += 2;
+    if (score > bestScore) {
+      best = v;
+      bestScore = score;
+    }
+  }
+  return best;
+}
+
 /** True when the browser actually has a voice that can read this language. */
 function hasBrowserVoiceFor(appLanguage: string): boolean {
-  if (typeof window === "undefined" || !("speechSynthesis" in window)) return false;
-  const voices = window.speechSynthesis.getVoices();
-  if (voices.length === 0) return false;
-  const tag = speechCodeFor(appLanguage);
-  const base = tag.split("-")[0];
-  return voices.some((v) => v.lang === tag || v.lang?.startsWith(base));
+  return pickBrowserVoice(appLanguage) !== null;
+}
+
+/** Chrome fills the voice list asynchronously; wait briefly for it. */
+function waitForBrowserVoices(ms = 1500): Promise<void> {
+  if (typeof window === "undefined" || !("speechSynthesis" in window)) return Promise.resolve();
+  if (window.speechSynthesis.getVoices().length > 0) return Promise.resolve();
+  return new Promise((resolve) => {
+    const done = () => {
+      window.speechSynthesis.removeEventListener("voiceschanged", done);
+      resolve();
+    };
+    window.speechSynthesis.addEventListener("voiceschanged", done);
+    setTimeout(done, ms);
+  });
+}
+
+/** What /api/voice/status reported when voice mode opened. */
+interface VoiceEngines {
+  /** Ollama mode: Whisper + Ollama on this machine, no API keys. */
+  local: boolean;
+  ready?: boolean;
+  /** Languages the server can speak locally; others go to the browser. */
+  tts?: string[];
+  /** Cloud mode: false when Sarvam cannot speak (e.g. out of credit). */
+  serverTts?: boolean;
+  llm?: string;
 }
 
 export function VoiceMode({
@@ -166,6 +215,8 @@ export function VoiceMode({
   /** Language Sarvam heard, shown so the user can see they were understood. */
   const [heardLanguage, setHeardLanguage] = useState<string | null>(null);
   const [turns, setTurns] = useState<{ user: string; assistant: string }[]>([]);
+  const [engines, setEngines] = useState<VoiceEngines | null>(null);
+  const enginesRef = useRef<VoiceEngines | null>(null);
 
   // --- media plumbing ---
   const streamRef = useRef<MediaStream | null>(null);
@@ -211,7 +262,7 @@ export function VoiceMode({
    * started the moment the clause was extracted — so clause N+1 is being
    * synthesised while clause N is still playing, instead of after it.
    */
-  const clipsRef = useRef<{ text: string; audio: Promise<string | null> }[]>([]);
+  const clipsRef = useRef<{ text: string; lang: string; audio: Promise<string | null> }[]>([]);
   const pumpingRef = useRef(false);
   const cancelSpeechRef = useRef(false);
   const streamDoneRef = useRef(true);
@@ -219,6 +270,9 @@ export function VoiceMode({
   const ttsAbortsRef = useRef<Set<AbortController>>(new Set());
   const objectUrlsRef = useRef<string[]>([]);
   const ttsBlockedRef = useRef(false);
+  /** Cloud voice unavailable for this whole session (unlike ttsBlockedRef,
+   *  which is per-language and reset when a new language is heard). */
+  const serverTtsDownRef = useRef(false);
   const warnedNoVoiceRef = useRef(false);
 
   // --- chat stream ---
@@ -331,17 +385,14 @@ export function VoiceMode({
         }
 
         try {
-          window.speechSynthesis.cancel();
+          // No speechSynthesis.cancel() here: clauses are spoken back to
+          // back, and cancelling at the start of each one cut off the end
+          // of the previous clause whenever its guard timer fired early.
+          // Barge-in and closing cancel through cancelSpeech() instead.
           const utterance = new SpeechSynthesisUtterance(trimmed);
-          const speechLang = speechCodeFor(appLanguage);
-          utterance.lang = speechLang;
-
-          const voices = window.speechSynthesis.getVoices();
-          const base = speechLang.split("-")[0];
-          utterance.voice =
-            voices.find((v) => v.lang === speechLang) ??
-            voices.find((v) => v.lang?.startsWith(base)) ??
-            null;
+          const voice = pickBrowserVoice(appLanguage);
+          utterance.lang = voice?.lang || speechCodeFor(appLanguage);
+          utterance.voice = voice;
 
           utterance.rate = 1.05;
           utterance.pitch = 1.0;
@@ -355,10 +406,13 @@ export function VoiceMode({
           };
           utterance.onend = done;
           utterance.onerror = done;
-          // Guard against a stalled synthesiser.
-          setTimeout(done, Math.max(1500, trimmed.length * 100));
+          // Guard against a stalled synthesiser. Generous: Hindi online
+          // voices read ~10-12 characters a second and take a moment to start.
+          setTimeout(done, 4000 + trimmed.length * 130);
 
           window.speechSynthesis.speak(utterance);
+          // Chrome sometimes leaves the queue paused after a cancel().
+          window.speechSynthesis.resume();
         } catch {
           resolve();
         }
@@ -371,6 +425,12 @@ export function VoiceMode({
   const synth = useCallback(
     async (text: string, appLanguage: string): Promise<string | null> => {
       if (ttsBlockedRef.current) return null;
+      // Ollama mode without a local voice for this language: the browser
+      // speaks. Skipping the request saves a round trip on every clause.
+      const eng = enginesRef.current;
+      if (eng?.local && !(eng.tts ?? []).includes(appLanguage.split("-")[0])) return null;
+      // Cloud voice known to be down: speak with the browser straight away.
+      if (serverTtsDownRef.current || (eng && !eng.local && eng.serverTts === false)) return null;
 
       const controller = new AbortController();
       ttsAbortsRef.current.add(controller);
@@ -388,7 +448,12 @@ export function VoiceMode({
           const detail = await res.json().catch(() => null);
           // No Sarvam voice can read this script (Urdu, for one). Stop
           // asking for the rest of this answer.
-          if (detail?.error?.code === "TTS_LANGUAGE_UNSUPPORTED") {
+          // The provider itself is down (out of credit, unreachable): every
+          // later clause would fail the same way, whatever its language.
+          if (detail?.error?.code === "TTS_PROVIDER_UNAVAILABLE") {
+            serverTtsDownRef.current = true;
+          }
+          if (detail?.error?.code === "TTS_LANGUAGE_UNSUPPORTED" || detail?.error?.code === "TTS_USE_BROWSER") {
             ttsBlockedRef.current = true;
           }
           return null;
@@ -478,7 +543,7 @@ export function VoiceMode({
         if (cancelSpeechRef.current) break;
 
         const played = url ? await playUrl(url) : false;
-        if (!played && !cancelSpeechRef.current) await browserSpeak(clip.text, replyLanguage());
+        if (!played && !cancelSpeechRef.current) await browserSpeak(clip.text, clip.lang);
       }
     } finally {
       pumpingRef.current = false;
@@ -488,7 +553,7 @@ export function VoiceMode({
         resumeListening();
       }
     }
-  }, [browserSpeak, playUrl, replyLanguage, resumeListening, setPhaseSafe]);
+  }, [browserSpeak, playUrl, resumeListening, setPhaseSafe]);
 
   /**
    * Queues one clause. Synthesis starts immediately rather than when the
@@ -497,9 +562,15 @@ export function VoiceMode({
    */
   const enqueueSpeech = useCallback(
     (sentence: string) => {
-      const clean = sentence.trim();
+      // A clause can begin with punctuation left over from the split
+      // (". आप अपने…"); some voices read it out as "dot".
+      const clean = sentence.replace(/^[\s.,;:!?।॥|\-—]+/, "").trim();
       if (!clean) return;
-      clipsRef.current.push({ text: clean, audio: synth(clean, replyLanguage()) });
+      // The voice follows the script actually written, not only the
+      // language that was requested: a model that slips into Hindi must
+      // not be read out by an English voice.
+      const lang = speechLanguageFor(clean, replyLanguage());
+      clipsRef.current.push({ text: clean, lang, audio: synth(clean, lang) });
       void pump();
     },
     [pump, replyLanguage, synth]
@@ -680,6 +751,8 @@ export function VoiceMode({
       try {
         const form = new FormData();
         form.append("audio", blob, "utterance.webm");
+        // Tie-breaker for the local recogniser (ignored by Sarvam/Groq).
+        form.append("language", normalizeLanguage(language));
         const res = await fetch("/api/voice/stt", { method: "POST", body: form });
         const json = await res.json().catch(() => null);
 
@@ -725,7 +798,7 @@ export function VoiceMode({
         resumeListening();
       }
     },
-    [pauseListening, resumeListening, runVoiceTurn, setPhaseSafe]
+    [language, pauseListening, resumeListening, runVoiceTurn, setPhaseSafe]
   );
 
   // ---------------------------------------------------------------
@@ -912,6 +985,7 @@ export function VoiceMode({
     cancelSpeechRef.current = false;
     streamDoneRef.current = true;
     ttsBlockedRef.current = false;
+    serverTtsDownRef.current = false;
     warnedNoVoiceRef.current = false;
     detectedLanguageRef.current = null;
     audioIdxRef.current = 0;
@@ -923,6 +997,8 @@ export function VoiceMode({
     setAnswerText("");
     setHeardLanguage(null);
     setTurns([]);
+    setEngines(null);
+    enginesRef.current = null;
     setPhaseSafe("starting");
 
     let cancelled = false;
@@ -931,11 +1007,14 @@ export function VoiceMode({
       try {
         unlockAudioPlayback();
 
-        // Some browsers only populate the voice list asynchronously; ask
-        // early so hasBrowserVoiceFor has something to inspect later.
-        if (typeof window !== "undefined" && "speechSynthesis" in window) {
-          window.speechSynthesis.getVoices();
-        }
+        // Which engines answer this session. In Ollama mode this call also
+        // starts local Whisper and loads the model, in parallel with the
+        // microphone permission prompt and the browser voice list.
+        const enginesPromise = fetch("/api/voice/status")
+          .then((r) => r.json())
+          .then((j) => (j?.data ?? { local: false }) as VoiceEngines)
+          .catch(() => ({ local: false }) as VoiceEngines);
+        const voicesPromise = waitForBrowserVoices();
 
         const stream = await navigator.mediaDevices.getUserMedia({
           audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
@@ -946,6 +1025,19 @@ export function VoiceMode({
           return;
         }
         streamRef.current = stream;
+
+        const eng = await enginesPromise;
+        await voicesPromise;
+        if (cancelled) return;
+        enginesRef.current = eng;
+        setEngines(eng);
+        if (eng.local && !eng.ready) {
+          setErrorMessage(
+            "Ollama mode is ON, but local speech recognition could not start. Run \"npm run voice:local\" in the project folder (needs Python with faster-whisper), then try again."
+          );
+          setPhaseSafe("error");
+          return;
+        }
 
         const Ctor: typeof AudioContext = window.AudioContext ?? (window as any).webkitAudioContext;
         const ctx = new Ctor();
@@ -1018,9 +1110,13 @@ export function VoiceMode({
           ? "Microphone muted"
           : "Listening… Speak anytime"
         : phase === "transcribing"
-          ? "Understanding your question…"
+          ? engines?.local
+            ? "Understanding your question (on this computer)…"
+            : "Understanding your question…"
           : phase === "thinking"
-            ? "Thinking…"
+            ? engines?.local
+              ? "Thinking (local model)…"
+              : "Thinking…"
             : phase === "speaking"
               ? "Speaking… (Tap to interrupt)"
               : "Voice mode stopped";
@@ -1154,6 +1250,12 @@ export function VoiceMode({
               <p className="text-sm font-bold uppercase tracking-widest text-slate-400">
                 {statusLabel}
               </p>
+
+              {engines?.local && (
+                <p className="mt-1.5 text-[11px] text-emerald-400/90">
+                  Ollama mode: running on this computer ({engines.llm ?? "local model"}), no API keys
+                </p>
+              )}
 
               {heardLanguage && (
                 <p className="mt-1.5 text-[11px] text-slate-500">

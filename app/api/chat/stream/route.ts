@@ -3,7 +3,8 @@ import { auth } from "@/lib/auth/auth";
 import { apiError } from "@/lib/utils/api-response";
 import { chatMessageSchema } from "@/lib/validation/schemas";
 import { retrieveRelevantChunks } from "@/lib/rag/retriever";
-import { buildRAGMessages, buildLanguageDirective, PHONE_CALL_RULES, type ChatMode } from "@/lib/rag/prompt";
+import { DEFAULT_LANGUAGE, normalizeLanguage } from "@/lib/i18n/languages";
+import { buildRAGMessages, buildLocalVoiceMessages, buildLanguageDirective, PHONE_CALL_RULES, type ChatMode } from "@/lib/rag/prompt";
 import { verifyCallToken, callTokenFromHeaders } from "@/lib/calls/token";
 import { isSmallTalk, buildSmallTalkPrompt } from "@/lib/rag/smalltalk";
 import { runInvestigationTurn } from "@/lib/fir/investigator";
@@ -429,7 +430,8 @@ export async function POST(req: NextRequest) {
         // Quick/knowledge answers are always one thing — tell the
         // client immediately rather than making it wait for content.
         // A greeting is always a plain answer, whatever the mode.
-        if (smallTalk) {
+        // Local voice is always a plain spoken answer too (see below).
+        if (smallTalk || (localMode && voice && !isPhone)) {
           send("kind", { kind: "answer" });
         } else if (mode !== "case") {
           send("kind", { kind: mode === "quick" ? "answer" : "explainer" });
@@ -445,7 +447,16 @@ export async function POST(req: NextRequest) {
         // 'Disclaimer'") over a vaguer instruction bolted on at the end.
         // Retrieval, citations and the mode's own logic are unchanged;
         // only the shape of the prose does.
-        const baseMessages = smallTalk
+        // Voice on the local model: a compact prompt (see
+        // buildLocalVoiceMessages). On a laptop CPU the full prompt meant a
+        // minute of silence before the first spoken word. Every mode gets a
+        // direct spoken answer here: the case-mode intake protocol is more
+        // than a small local model can follow reliably, and a half-followed
+        // protocol is worse for a listener than a plain answer.
+        const compactLocalVoice = localMode && voice && !isPhone;
+        const baseMessages = compactLocalVoice
+          ? buildLocalVoiceMessages(content, chunks, history, language)
+          : smallTalk
           ? [
               {
                 role: "system" as const,
@@ -467,7 +478,17 @@ export async function POST(req: NextRequest) {
         // Appended to the leading system message rather than added as a
         // separate turn, so it cannot be mistaken for something the user
         // said in this conversation.
-        const extraSystem = (memoryBlock ?? "") + (isPhone ? PHONE_CALL_RULES : "");
+        // English has no language directive at all (it is the default), so
+        // after Hindi turns in the same conversation the model kept replying
+        // in Hindi to a question asked in English. In voice that is worse
+        // than a wrong language: the English voice reads Devanagari as noise.
+        const voiceEnglishNote =
+          voice && !compactLocalVoice && normalizeLanguage(language) === DEFAULT_LANGUAGE
+            ? "\n\nLANGUAGE: Reply in English only, even if earlier messages in this conversation were in another language."
+            : "";
+        const extraSystem = compactLocalVoice
+          ? "" // every prompt token is seconds of silence on the local model
+          : (memoryBlock ?? "") + (isPhone ? PHONE_CALL_RULES : "") + voiceEnglishNote;
         const messages = extraSystem
           ? baseMessages.map((m, i) =>
               i === 0 && m.role === "system"
@@ -479,14 +500,14 @@ export async function POST(req: NextRequest) {
         // ---- Generation, with marker resolution for case mode ----
         let rawAnswer = ""; // exactly what the model produced, marker included
         let answer = ""; // what has been shown to the user so far (marker stripped)
-        let kind: MessageKind | "answer" | "explainer" = smallTalk
+        let kind: MessageKind | "answer" | "explainer" = smallTalk || compactLocalVoice
           ? "answer"
           : mode === "case"
             ? ("report" as MessageKind)
             : mode === "quick"
               ? "answer"
               : "explainer";
-        let markerResolved = mode !== "case" || smallTalk;
+        let markerResolved = mode !== "case" || smallTalk || compactLocalVoice;
         let servedBy: string | undefined;
         let servedByAnnounced = false;
 
@@ -524,7 +545,22 @@ export async function POST(req: NextRequest) {
           // (at most four sentences) fits easily in 1500. The smaller request
           // also fits under Groq's free 8k tokens-per-minute cap, which a
           // 5000-token voice request in Case mode did not.
-          maxTokens: isPhone ? 900 : voice ? 1500 : mode === "case" ? 5000 : mode === "knowledge" ? 3500 : 3000,
+          //
+          // The local model is the exception: it has no hidden reasoning
+          // budget, and on a laptop CPU (~10 tokens/s) every token is real
+          // waiting. Four spoken sentences fit comfortably in 450 tokens,
+          // even in Devanagari; the cap only stops a runaway reply.
+          maxTokens: isPhone
+            ? 900
+            : voice
+              ? localMode
+                ? 450
+                : 1500
+              : mode === "case"
+                ? 5000
+                : mode === "knowledge"
+                  ? 3500
+                  : 3000,
         })) {
           // Several fallbacks may be tried before one produces text; only
           // the provider that actually answers is worth telling the user.
@@ -681,7 +717,10 @@ export async function POST(req: NextRequest) {
         // Deliberately AFTER the answer has been sent: recording what is
         // worth carrying forward must never make the user wait for their
         // reply. Small talk is skipped — "hi" contains nothing durable.
-        if (!smallTalk && answer.trim().length > 40) {
+        // Not on local voice turns: on one laptop CPU it is a second model
+        // job running exactly when the user asks the next question, and it
+        // made the next transcription and answer several times slower.
+        if (!smallTalk && !compactLocalVoice && answer.trim().length > 40) {
           void extractMemories(userId, content, answer, conversationId).catch(() => {
             // Already logged inside; memory must never surface as an error.
           });

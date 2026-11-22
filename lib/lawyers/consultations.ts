@@ -7,6 +7,7 @@ import { prisma } from "@/lib/db/prisma";
 import { availableActions, type Party } from "./consultation-rules";
 import { photoUrl } from "./server";
 import type { SessionUser } from "./server";
+import { isDemoOperator } from "./demo-operator";
 
 export const consultationInclude = {
   lawyer: true,
@@ -31,6 +32,8 @@ export async function loadForParty(
   if (!request) return null;
   if (request.citizenId === user.id) return { request, party: "CITIZEN" };
   if (request.lawyer.userId === user.id) return { request, party: "LAWYER" };
+  // A demo advocate has no real owner: demo operators answer for them.
+  if (request.lawyer.isDemo && isDemoOperator(user)) return { request, party: "LAWYER" };
   return null;
 }
 

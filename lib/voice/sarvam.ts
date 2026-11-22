@@ -21,6 +21,9 @@
 // ==========================================================
 
 import { logger } from "@/lib/logging/logger";
+// No undici keep-alive agent here (unlike groq-stt.ts): this module is
+// reachable from client components through lib/i18n/sarvam-translate, and
+// undici pulls node:net into the browser bundle, which crashes the page.
 
 const STT_URL = "https://api.sarvam.ai/speech-to-text";
 const TTS_URL = "https://api.sarvam.ai/text-to-speech";
@@ -52,7 +55,18 @@ function allSarvamKeys(): string[] {
  * time. With a page translating 280 strings that is 280 pointless
  * calls, every one of them ahead of a key that would have worked.
  */
-const benchedKeys = new Map<string, number>();
+// Shared through globalThis: Next bundles every route separately, so a
+// module-level variable here would be a different copy in /api/voice/stt,
+// /speak and /status — one route learning "out of credit" would not stop
+// the others from paying for it again.
+type SarvamState = { benched: Map<string, number>; noCreditUntil: number; ttsGoodUntil: number };
+const shared = globalThis as unknown as { __legalsetuSarvam?: SarvamState };
+const state: SarvamState = (shared.__legalsetuSarvam ??= {
+  benched: new Map(),
+  noCreditUntil: 0,
+  ttsGoodUntil: 0,
+});
+const benchedKeys = state.benched;
 
 /** Out of credit or revoked: hours, not minutes. Rate limited: seconds. */
 const CREDIT_BENCH_MS = 60 * 60 * 1000;
@@ -158,6 +172,21 @@ function shouldRotate(status: number): boolean {
  */
 const REQUEST_TIMEOUT_MS = 12_000;
 
+/**
+ * Once EVERY key has answered 402 "No credits available", asking again only
+ * burns a second or two per request while voice mode waits. Skip Sarvam for
+ * a few minutes (then probe again, in case credit was added) so callers can
+ * move to their fallback at once.
+ */
+// 30 min, not 5: credit is only ever restored by someone topping up, and
+// every re-check costs the next utterance a round-trip per key (~2-4 s).
+const NO_CREDIT_COOLDOWN_MS = 30 * 60 * 1000;
+
+/** True while Sarvam is being skipped because every key is out of credit. */
+export function sarvamOutOfCredit(): boolean {
+  return Date.now() < state.noCreditUntil;
+}
+
 async function callSarvam(
   url: string,
   build: (key: string) => RequestInit,
@@ -167,6 +196,7 @@ async function callSarvam(
   if (keys.length === 0) {
     throw new Error("SARVAM_NOT_CONFIGURED");
   }
+  if (sarvamOutOfCredit()) throw new Error("SARVAM_HTTP_402");
 
   let lastStatus = 0;
   let lastBody = "";
@@ -196,6 +226,7 @@ async function callSarvam(
     logger.warn("Sarvam key rejected, trying next", { label, status: res.status });
   }
 
+  if (lastStatus === 402) state.noCreditUntil = Date.now() + NO_CREDIT_COOLDOWN_MS;
   logger.error("Sarvam request failed", {
     label,
     status: lastStatus,
@@ -287,5 +318,28 @@ export async function sarvamSpeak(
   const json = (await res.json()) as { audios?: string[] };
   const base64 = json.audios?.[0];
   if (!base64) throw new Error("SARVAM_EMPTY_AUDIO");
+  state.ttsGoodUntil = Date.now() + TTS_PROBE_TTL_MS;
   return Buffer.from(base64, "base64");
+}
+
+/**
+ * Can Sarvam speak right now? Voice mode asks once when it opens, so that
+ * when every key is out of credit the browser's own voice is used from the
+ * first clause — instead of each clause first making a doomed request.
+ * A success is remembered for a while; a failure for as long as the
+ * no-credit cooldown. Real synthesis keeps the "good" answer fresh.
+ */
+const TTS_PROBE_TTL_MS = 10 * 60 * 1000;
+let ttsProbe: Promise<boolean> | null = null;
+
+export async function sarvamTtsAvailable(): Promise<boolean> {
+  if (!isSarvamConfigured() || sarvamOutOfCredit()) return false;
+  if (Date.now() < state.ttsGoodUntil) return true;
+  ttsProbe ??= sarvamSpeak("ठीक है", "hi-IN")
+    .then(() => true)
+    .catch(() => false)
+    .finally(() => {
+      ttsProbe = null;
+    });
+  return ttsProbe;
 }
