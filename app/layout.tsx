@@ -6,6 +6,7 @@ import { Toaster } from "sonner";
 import { AuthSessionProvider } from "@/components/providers/session-provider";
 import { ThemeProvider } from "@/components/providers/ThemeProvider";
 import { LanguageProvider } from "@/components/providers/LanguageProvider";
+import ExperimentProvider from "@/components/providers/ExperimentProvider";
 import { AutoTranslate } from "@/components/i18n/AutoTranslate";
 import { LANGUAGE_COOKIE, getLanguage, normalizeLanguage } from "@/lib/i18n/languages";
 
@@ -37,7 +38,7 @@ export default async function RootLayout({
         <AuthSessionProvider>
           <ThemeProvider attribute="class" defaultTheme="dark" enableSystem={false}>
             <LanguageProvider initialLanguage={initialLanguage}>
-              {children}
+              <ExperimentProvider>{children}</ExperimentProvider>
               {/* Translates every rendered string into the chosen
                   language at runtime — no locale files involved. */}
               <AutoTranslate />
