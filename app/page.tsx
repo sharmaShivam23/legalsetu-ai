@@ -1,7 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useContext, useEffect, useState } from "react";
+import { FlagsmithContext, useExperiment } from "@flagsmith/flagsmith/react";
+import { pick } from "@/lib/experiment";
 import { useTheme } from "next-themes";
 import dynamic from "next/dynamic";
 import { motion } from "framer-motion";
@@ -152,6 +154,10 @@ function Reveal({ children, delay = 0 }: { children: React.ReactNode; delay?: nu
 
 export default function LandingPage() {
   const { theme, setTheme } = useTheme();
+  // A/B test: which wording gets more visitors to start? Verdict referees it.
+  // Keep this as one single expression so Verdict's cleanup PR can rewrite it.
+  const heroCta = pick(useExperiment("hero_cta_test"), { control: "Get started free", start_it: "Start it" });
+  const flagsmith = useContext(FlagsmithContext);
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
@@ -300,10 +306,16 @@ export default function LandingPage() {
             </p>
 
             <div className="mt-10 flex flex-col items-center justify-center gap-5 sm:flex-row">
-              <Link href="/register">
+              <Link
+                href="/register"
+                onClick={() => {
+                  flagsmith?.trackEvent("hero_cta_click");
+                  flagsmith?.flushEvents?.();
+                }}
+              >
                 <Button size="lg" className="group relative h-14 overflow-hidden rounded-full bg-blue-600 px-8 text-base font-bold text-white shadow-lg shadow-blue-500/20 transition-all hover:-translate-y-1 hover:scale-105 hover:bg-blue-700 dark:bg-blue-500 dark:shadow-[0_0_40px_rgba(59,130,246,0.4)] dark:hover:bg-blue-400">
                   <span className="relative z-10 flex items-center gap-2">
-                    Get started free <ArrowRight className="h-5 w-5 transition-transform group-hover:translate-x-1" />
+                    {heroCta} <ArrowRight className="h-5 w-5 transition-transform group-hover:translate-x-1" />
                   </span>
                   <div className="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/20 to-transparent group-hover:animate-[beam_1s_ease-in-out]" />
                 </Button>
